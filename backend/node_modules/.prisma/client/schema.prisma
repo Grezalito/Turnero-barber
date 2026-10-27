@@ -1,0 +1,120 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  SUPERADMIN
+  BARBER
+  CLIENT
+}
+
+enum SlotStatus {
+  AVAILABLE
+  PENDING_PAYMENT
+  CONFIRMED
+  CANCELLED
+}
+
+enum ReminderStatus {
+  PENDING
+  SENT
+  FAILED
+  CANCELLED
+}
+
+model User {
+  id             String            @id @default(uuid())
+  dni            String            @unique
+  password       String
+  name           String
+  phone          String
+  email          String?
+  role           Role              @default(CLIENT)
+  barber_profile BarberProfile?
+  appointments   AppointmentSlot[] @relation("ClientAppointments")
+  created_at     DateTime          @default(now())
+  updated_at     DateTime          @updatedAt
+
+  @@map("users")
+}
+
+model BarberProfile {
+  id                    String             @id @default(uuid())
+  user_id               String             @unique
+  user                  User               @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  slug                  String             @unique
+  shop_name             String
+  address               String?
+  reminder_addon_active Boolean            @default(false)
+  reminder_config       Json?
+  slots                 AppointmentSlot[]
+  reminders             ReminderQueue[]
+  settlements           WeeklySettlement[]
+  created_at            DateTime           @default(now())
+  updated_at            DateTime           @updatedAt
+
+  @@map("barber_profiles")
+}
+
+model WeeklySettlement {
+  id                   String        @id @default(uuid())
+  barber_id            String
+  barber               BarberProfile @relation(fields: [barber_id], references: [id], onDelete: Cascade)
+  week_start           DateTime
+  week_end             DateTime
+  confirmed_slots      Int           @default(0)
+  bonus_tier           String        @default("NONE")
+  bonus_amount_ars     Int           @default(0)
+  reminder_ia_bonified Boolean       @default(false)
+  transferred          Boolean       @default(false)
+  transferred_at       DateTime?
+  created_at           DateTime      @default(now())
+  updated_at           DateTime      @updatedAt
+
+  @@unique([barber_id, week_start])
+  @@map("weekly_settlements")
+}
+
+model AppointmentSlot {
+  id               String          @id @default(uuid())
+  barber_id        String
+  barber           BarberProfile   @relation(fields: [barber_id], references: [id], onDelete: Cascade)
+  client_id        String?
+  client           User?           @relation("ClientAppointments", fields: [client_id], references: [id], onDelete: SetNull)
+  start_time       DateTime
+  end_time         DateTime
+  status           SlotStatus      @default(AVAILABLE)
+  locked_until     DateTime?
+  deposit_amount   Int             @default(2000)
+  mp_payment_id    String?         @unique
+  mp_preference_id String?
+  reminders        ReminderQueue[]
+  created_at       DateTime        @default(now())
+  updated_at       DateTime        @updatedAt
+
+  @@unique([barber_id, start_time])
+  @@index([status, locked_until])
+  @@map("appointment_slots")
+}
+
+model ReminderQueue {
+  id                String          @id @default(uuid())
+  slot_id           String
+  slot              AppointmentSlot @relation(fields: [slot_id], references: [id], onDelete: Cascade)
+  barber_id         String
+  barber            BarberProfile   @relation(fields: [barber_id], references: [id], onDelete: Cascade)
+  client_phone      String
+  scheduled_for     DateTime
+  status            ReminderStatus  @default(PENDING)
+  generated_message String?
+  created_at        DateTime        @default(now())
+  updated_at        DateTime        @updatedAt
+
+  @@index([status, scheduled_for])
+  @@map("reminder_queue")
+}

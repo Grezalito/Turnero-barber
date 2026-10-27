@@ -1,0 +1,249 @@
+"use strict";
+var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
+    var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
+    if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
+    else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
+    return c > 3 && r && Object.defineProperty(target, key, r), r;
+};
+var __metadata = (this && this.__metadata) || function (k, v) {
+    if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
+};
+var __param = (this && this.__param) || function (paramIndex, decorator) {
+    return function (target, key) { decorator(target, key, paramIndex); }
+};
+var PaymentsService_1;
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.PaymentsService = exports.NON_REFUNDABLE_DEPOSIT_POLICY = exports.PLATFORM_DEPOSIT_ARS = void 0;
+const common_1 = require("@nestjs/common");
+const config_1 = require("@nestjs/config");
+const client_1 = require("@prisma/client");
+const mail_service_1 = require("../mail/mail.service");
+const prisma_service_1 = require("../prisma/prisma.service");
+const reminder_interface_1 = require("../reminders/reminder.interface");
+exports.PLATFORM_DEPOSIT_ARS = 2000;
+exports.NON_REFUNDABLE_DEPOSIT_POLICY = 'Reserva garantizada: la seña de $2.000 ARS no es reembolsable ni transferible ante cancelaciones o inasistencias';
+let PaymentsService = PaymentsService_1 = class PaymentsService {
+    constructor(prisma, configService, mailService, reminderProvider) {
+        this.prisma = prisma;
+        this.configService = configService;
+        this.mailService = mailService;
+        this.reminderProvider = reminderProvider;
+        this.logger = new common_1.Logger(PaymentsService_1.name);
+    }
+    async createDepositPreference(params) {
+        const mpAccessToken = this.configService.get('MP_ACCESS_TOKEN') || '';
+        const appPublicUrl = this.configService.get('FRONTEND_URL') ||
+            this.configService.get('PUBLIC_APP_URL') ||
+            'http://localhost:5173';
+        const webhookUrl = this.configService.get('MP_WEBHOOK_URL') ||
+            'http://localhost:3000/payments/webhook';
+        const preferencePayload = {
+            items: [
+                {
+                    id: params.slotId,
+                    title: `Seña de Turno (30 min) - ${params.shopName}`,
+                    description: `Reserva de turno para DNI ${params.clientDni}`,
+                    quantity: 1,
+                    currency_id: 'ARS',
+                    unit_price: exports.PLATFORM_DEPOSIT_ARS,
+                },
+            ],
+            external_reference: params.slotId,
+            notification_url: webhookUrl,
+            back_urls: {
+                success: `${appPublicUrl}?payment=success&slot=${params.slotId}`,
+                failure: `${appPublicUrl}?payment=failure&slot=${params.slotId}`,
+                pending: `${appPublicUrl}?payment=pending&slot=${params.slotId}`,
+            },
+            auto_return: 'approved',
+            statement_descriptor: 'TURNERO BARBER',
+        };
+        const isPlaceholderToken = !mpAccessToken ||
+            mpAccessToken.includes('CENTRAL-PLATFORM-TOKEN') ||
+            mpAccessToken === 'TEST-000000';
+        if (!isPlaceholderToken) {
+            try {
+                const response = await fetch('https://api.mercadopago.com/checkout/preferences', {
+                    method: 'POST',
+                    headers: {
+                        Authorization: `Bearer ${mpAccessToken}`,
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(preferencePayload),
+                });
+                if (response.ok) {
+                    const data = (await response.json());
+                    return {
+                        preference_id: data.id,
+                        init_point: data.init_point,
+                        sandbox_init_point: data.sandbox_init_point || data.init_point,
+                        deposit_amount: exports.PLATFORM_DEPOSIT_ARS,
+                        external_reference: params.slotId,
+                        is_sandbox_local: false,
+                    };
+                }
+            }
+            catch (err) {
+                this.logger.warn(`Error conectando con API de Mercado Pago, usando preferencia local de desarrollo: ${err.message}`);
+            }
+        }
+        const fallbackPrefId = `pref_mp_${params.slotId.slice(0, 8)}_${Date.now()}`;
+        const checkoutUrl = `${appPublicUrl}/checkout-mp?pref_id=${fallbackPrefId}&external_reference=${params.slotId}&amount=${exports.PLATFORM_DEPOSIT_ARS}`;
+        return {
+            preference_id: fallbackPrefId,
+            init_point: checkoutUrl,
+            sandbox_init_point: checkoutUrl,
+            deposit_amount: exports.PLATFORM_DEPOSIT_ARS,
+            external_reference: params.slotId,
+            is_sandbox_local: true,
+        };
+    }
+    async handleWebhook(dto, query) {
+        const rawPaymentId = dto.payment_id ||
+            dto.data?.id ||
+            query['data.id'] ||
+            query['id'] ||
+            undefined;
+        if (!rawPaymentId) {
+            throw new common_1.BadRequestException('Falta el identificador de pago (payment_id o data.id) en el webhook');
+        }
+        const mpPaymentId = String(rawPaymentId);
+        const alreadyProcessedSlot = await this.prisma.appointmentSlot.findUnique({
+            where: { mp_payment_id: mpPaymentId },
+        });
+        if (alreadyProcessedSlot) {
+            this.logger.log(`[Idempotencia] Pago mp_payment_id=${mpPaymentId} ya fue procesado para el slot ${alreadyProcessedSlot.id}`);
+            return {
+                idempotent: true,
+                status: alreadyProcessedSlot.status,
+                slot_id: alreadyProcessedSlot.id,
+                mp_payment_id: mpPaymentId,
+            };
+        }
+        const paymentDetails = await this.resolvePaymentDetails(mpPaymentId, dto);
+        if (paymentDetails.status !== 'approved') {
+            this.logger.log(`Pago ${mpPaymentId} recibido con estado "${paymentDetails.status}" (no aprobado). Ignorando confirmación.`);
+            return {
+                processed: false,
+                status: paymentDetails.status,
+                reason: `Estado de pago no aprobado (${paymentDetails.status})`,
+                mp_payment_id: mpPaymentId,
+                slot_id: paymentDetails.externalReference,
+            };
+        }
+        if (!paymentDetails.externalReference) {
+            throw new common_1.BadRequestException(`El pago ${mpPaymentId} no posee external_reference (slotId)`);
+        }
+        const confirmedSlot = await this.prisma.$transaction(async (tx) => {
+            const slot = await tx.appointmentSlot.findUnique({
+                where: { id: paymentDetails.externalReference },
+                include: {
+                    barber: {
+                        include: { user: true },
+                    },
+                    client: true,
+                },
+            });
+            if (!slot) {
+                throw new common_1.NotFoundException(`No existe el turno (slot) con id ${paymentDetails.externalReference}`);
+            }
+            if (slot.status === client_1.SlotStatus.CONFIRMED) {
+                return slot;
+            }
+            return tx.appointmentSlot.update({
+                where: { id: slot.id },
+                data: {
+                    status: client_1.SlotStatus.CONFIRMED,
+                    mp_payment_id: mpPaymentId,
+                    locked_until: null,
+                    deposit_amount: exports.PLATFORM_DEPOSIT_ARS,
+                },
+                include: {
+                    barber: {
+                        include: { user: true },
+                    },
+                    client: true,
+                },
+            });
+        });
+        let reminderRecord = null;
+        if (confirmedSlot.barber.reminder_addon_active) {
+            reminderRecord = await this.reminderProvider.scheduleForConfirmedSlot({
+                slotId: confirmedSlot.id,
+                barberId: confirmedSlot.barber_id,
+                clientPhone: confirmedSlot.client?.phone || '+5491100000000',
+                clientName: confirmedSlot.client?.name || 'Cliente',
+                shopName: confirmedSlot.barber.shop_name,
+                startTime: confirmedSlot.start_time,
+                reminderAddonActive: confirmedSlot.barber.reminder_addon_active,
+            });
+        }
+        const emailResult = await this.mailService.sendAppointmentConfirmationEmails({
+            slotId: confirmedSlot.id,
+            shopName: confirmedSlot.barber.shop_name,
+            barberName: confirmedSlot.barber.user.name,
+            barberPhone: confirmedSlot.barber.user.phone,
+            barberEmail: confirmedSlot.barber.user.email,
+            address: confirmedSlot.barber.address,
+            clientName: confirmedSlot.client?.name || 'Cliente',
+            clientDni: confirmedSlot.client?.dni || 'S/D',
+            clientEmail: confirmedSlot.client?.email,
+            startTime: confirmedSlot.start_time,
+            endTime: confirmedSlot.end_time,
+            mpPaymentId: confirmedSlot.mp_payment_id || mpPaymentId,
+            depositAmountArs: confirmedSlot.deposit_amount,
+        });
+        return {
+            processed: true,
+            slot_id: confirmedSlot.id,
+            status: confirmedSlot.status,
+            mp_payment_id: confirmedSlot.mp_payment_id,
+            deposit_amount: confirmedSlot.deposit_amount,
+            start_time: confirmedSlot.start_time.toISOString(),
+            end_time: confirmedSlot.end_time.toISOString(),
+            barber_phone: confirmedSlot.barber.user.phone,
+            shop_name: confirmedSlot.barber.shop_name,
+            reminder_enqueued: Boolean(reminderRecord),
+            reminder_id: reminderRecord?.id || null,
+            reminder_message: reminderRecord?.generated_message || null,
+            reminder_scheduled_for: reminderRecord?.scheduled_for
+                ? reminderRecord.scheduled_for.toISOString()
+                : null,
+            email_notified: emailResult.clientEmailSent,
+            email_mode: emailResult.mode,
+        };
+    }
+    async resolvePaymentDetails(mpPaymentId, dto) {
+        const mpAccessToken = this.configService.get('MP_ACCESS_TOKEN') || '';
+        const isPlaceholderToken = !mpAccessToken ||
+            mpAccessToken.includes('CENTRAL-PLATFORM-TOKEN') ||
+            mpAccessToken === 'TEST-000000';
+        if (!isPlaceholderToken && !dto.external_reference) {
+            const response = await fetch(`https://api.mercadopago.com/v1/payments/${encodeURIComponent(mpPaymentId)}`, {
+                headers: {
+                    Authorization: `Bearer ${mpAccessToken}`,
+                },
+            });
+            if (response.ok) {
+                const paymentData = (await response.json());
+                return {
+                    status: paymentData.status,
+                    externalReference: paymentData.external_reference,
+                };
+            }
+        }
+        return {
+            status: dto.status || 'approved',
+            externalReference: dto.external_reference,
+        };
+    }
+};
+exports.PaymentsService = PaymentsService;
+exports.PaymentsService = PaymentsService = PaymentsService_1 = __decorate([
+    (0, common_1.Injectable)(),
+    __param(3, (0, common_1.Inject)(reminder_interface_1.REMINDER_PROVIDER)),
+    __metadata("design:paramtypes", [prisma_service_1.PrismaService,
+        config_1.ConfigService,
+        mail_service_1.MailService, Object])
+], PaymentsService);
+//# sourceMappingURL=payments.service.js.map
