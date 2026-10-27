@@ -1,0 +1,19 @@
+# Dependencias
+node_modules/
+
+# Archivos de entorno y credenciales (CRÍTICO)
+.env
+.env.local
+.env.production
+*.env
+backend/.env
+frontend/.env
+
+# Compilación
+dist/
+build/
+.vite/
+
+# Logs y temporales
+npm-debug.log*
+*.log
