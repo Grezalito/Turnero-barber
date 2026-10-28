@@ -4,11 +4,9 @@ import {
   Clock,
   Lock,
   ShieldAlert,
-  Sparkles,
   X,
   XCircle,
-  ExternalLink,
-  Bot,
+  CreditCard,
 } from 'lucide-react';
 import { LockSlotResponse, User } from '../types/api';
 import { NON_REFUNDABLE_LEGEND } from '../utils/postBookingAndGamification';
@@ -36,7 +34,6 @@ export const SandboxCheckoutModal: React.FC<SandboxCheckoutModalProps> = ({
   onClose,
   activeLock,
   shopName,
-  barberSlug,
   user,
   remainingSeconds,
   countdownFormatted,
@@ -57,11 +54,20 @@ export const SandboxCheckoutModal: React.FC<SandboxCheckoutModalProps> = ({
   const slotDate = activeLock.slot.start_time.slice(0, 10);
   const startLabel = formatTime30m(activeLock.slot.start_time);
   const endLabel = formatTime30m(activeLock.slot.end_time);
-  const isRealMpUrl =
-    activeLock.payment.init_point.includes('mercadopago.com') &&
+  const paymentUrl =
+    activeLock.payment.init_point || activeLock.payment.sandbox_init_point;
+  const isExternalMpUrl =
+    Boolean(paymentUrl) &&
+    paymentUrl.includes('mercadopago.com') &&
     !activeLock.payment.is_sandbox_local;
 
-  const handleApproveClick = async () => {
+  const handlePrimaryPaymentClick = async () => {
+    // Si existe un init_point real de Mercado Pago, redirigir en la misma pestaña (evita bloqueo de popups en PC)
+    if (isExternalMpUrl) {
+      window.location.href = paymentUrl;
+      return;
+    }
+
     setProcessingState('APPROVING');
     setRejectedFeedback(null);
     try {
@@ -94,28 +100,26 @@ export const SandboxCheckoutModal: React.FC<SandboxCheckoutModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-[#0A0A0B]/90 backdrop-blur-xs p-0 sm:p-4">
+    <div className="fixed inset-0 z-50 h-[100dvh] flex items-end sm:items-center justify-center bg-[#090D16]/85 backdrop-blur-xs p-0 sm:p-4 pointer-events-auto">
       <div
-        className="fixed inset-0"
+        className="fixed inset-0 z-40"
         onClick={() => {
           if (processingState === 'IDLE') onClose();
         }}
       />
 
-      <div className="relative z-10 w-full max-w-lg bg-[#121214] border-t sm:border border-[#242428] rounded-t-md sm:rounded-sm p-5 sm:p-6 space-y-5 max-h-[92vh] overflow-y-auto">
-        {/* Top Header */}
-        <div className="flex items-start justify-between gap-3 border-b border-[#242428] pb-4">
+      <div className="relative z-50 w-full max-w-lg bg-[#0F172A] border-t sm:border border-[#1E293B] rounded-t-xl sm:rounded-xl p-5 sm:p-6 space-y-4 max-h-[92dvh] overflow-y-auto pointer-events-auto shadow-2xl">
+        {/* Header */}
+        <div className="flex items-start justify-between gap-3 border-b border-[#1E293B] pb-3.5">
           <div>
-            <div className="flex items-center gap-2">
-              <span className="font-mono-code text-[10px] uppercase tracking-widest px-2 py-0.5 rounded-sm bg-[#0A0A0B] border border-[#D49A2A] text-[#D49A2A]">
-                SANDBOX LOCAL · MP_ACCESS_TOKEN DUMMY
-              </span>
-            </div>
-            <h2 className="font-display text-lg sm:text-xl font-extrabold uppercase tracking-wide text-[#F2EFE9] mt-2">
-              CHECKOUT MERCADO PAGO (SANDBOX LOCAL)
+            <span className="inline-block text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-[#2563EB]/12 border border-[#2563EB]/30 text-[#F8FAFC]">
+              Checkout Mercado Pago
+            </span>
+            <h2 className="text-lg font-semibold text-[#F8FAFC] mt-1.5">
+              Abonar seña de reserva
             </h2>
-            <p className="text-xs text-[#8A8A93] mt-0.5">
-              Simulador de pasarela de pago y disparo de Webhook idempotente
+            <p className="text-xs text-[#94A3B8] mt-0.5">
+              Acreditación inmediata para confirmar tu horario
             </p>
           </div>
 
@@ -123,166 +127,119 @@ export const SandboxCheckoutModal: React.FC<SandboxCheckoutModalProps> = ({
             type="button"
             onClick={onClose}
             disabled={processingState !== 'IDLE'}
-            className="min-w-[44px] min-h-[44px] rounded-sm bg-[#0A0A0B] border border-[#242428] hover:border-[#D49A2A] flex items-center justify-center text-[#8A8A93] hover:text-[#F2EFE9] transition-colors"
+            className="w-10 h-10 rounded-lg bg-[#090D16] border border-[#1E293B] hover:border-[#334155] flex items-center justify-center text-[#94A3B8] hover:text-[#F8FAFC] transition-colors cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        {/* 10-Minute Countdown Lock Bar */}
-        <div className="p-3.5 rounded-sm bg-[#0A0A0B] border border-[#D49A2A]/70 flex items-center justify-between gap-3">
+        {/* Estado de bloqueo temporal */}
+        <div className="p-3.5 rounded-lg bg-[#090D16] border border-[#1E293B] flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
-            <Lock className="w-4 h-4 text-[#D49A2A] shrink-0" />
+            <Lock className="w-4 h-4 text-[#2563EB] shrink-0" />
             <div>
-              <span className="block font-display text-[10px] uppercase tracking-wider text-[#8A8A93]">
-                ESTADO DEL TURNO EN DB
+              <span className="block text-[11px] font-medium text-[#94A3B8]">
+                Estado del turno
               </span>
-              <span className="font-mono-code text-xs font-bold text-[#D49A2A]">
-                PENDING_PAYMENT (BLOQUEO ATÓMICO)
+              <span className="text-xs font-semibold text-[#F8FAFC]">
+                Reserva temporal activa
               </span>
             </div>
           </div>
 
-          <div className="px-3 py-1.5 rounded-sm bg-[#121214] border border-[#C85A32] text-right shrink-0">
-            <span className="block text-[9px] font-display uppercase tracking-wider text-[#8A8A93]">
-              EXPIRA EN
+          <div className="px-3 py-1.5 rounded-lg bg-[#0F172A] border border-[#334155] text-right shrink-0">
+            <span className="block text-[10px] font-medium text-[#94A3B8]">
+              Expira en
             </span>
-            <span className="font-mono-code text-base font-bold text-[#C85A32] flex items-center gap-1">
-              <Clock className="w-3.5 h-3.5" />
+            <span className="text-sm font-semibold text-[#F8FAFC] flex items-center gap-1">
+              <Clock className="w-3.5 h-3.5 text-[#2563EB]" />
               {remainingSeconds > 0 ? countdownFormatted : '00:00'}
             </span>
           </div>
         </div>
 
-        {/* Order & Preference Summary */}
-        <div className="p-4 rounded-sm bg-[#0A0A0B] border border-[#242428] space-y-3">
-          <div className="flex items-center justify-between border-b border-[#242428] pb-2.5">
-            <span className="text-xs uppercase font-display tracking-wider text-[#8A8A93]">
-              CONCEPTO DE COBRO
-            </span>
-            <span className="font-mono-code text-xs text-[#F2EFE9]">
-              SEÑA DE TURNO (30 MIN)
+        {/* Resumen del turno */}
+        <div className="p-4 rounded-lg bg-[#090D16] border border-[#1E293B] space-y-2.5 text-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-[#94A3B8]">Barbería</span>
+            <span className="font-semibold text-[#F8FAFC]">{shopName}</span>
+          </div>
+
+          <div className="flex items-center justify-between">
+            <span className="text-[#94A3B8]">Fecha y horario (30 min)</span>
+            <span className="font-semibold text-[#F8FAFC]">
+              {slotDate} · {startLabel} a {endLabel} hs
             </span>
           </div>
 
           <div className="flex items-center justify-between">
-            <span className="text-xs uppercase font-display tracking-wider text-[#8A8A93]">
-              BARBERÍA
-            </span>
-            <span className="text-xs font-bold uppercase text-[#F2EFE9]">
-              {shopName} <span className="font-mono-code text-[#8A8A93]">(/{barberSlug})</span>
+            <span className="text-[#94A3B8]">Cliente</span>
+            <span className="font-medium text-[#F8FAFC]">
+              {user ? `${user.name} (DNI ${user.dni})` : 'Invitado'}
             </span>
           </div>
 
-          <div className="flex items-center justify-between">
-            <span className="text-xs uppercase font-display tracking-wider text-[#8A8A93]">
-              FECHA Y BLOQUE (30M)
+          <div className="pt-2.5 border-t border-[#1E293B] flex items-center justify-between">
+            <span className="text-sm font-semibold text-[#F8FAFC]">
+              Total seña a pagar
             </span>
-            <span className="font-mono-code text-xs font-bold text-[#D49A2A]">
-              {slotDate} · {startLabel} – {endLabel} HS
-            </span>
-          </div>
-
-          <div className="flex items-center justify-between">
-            <span className="text-xs uppercase font-display tracking-wider text-[#8A8A93]">
-              CLIENTE (DNI)
-            </span>
-            <span className="font-mono-code text-xs text-[#F2EFE9]">
-              {user ? `${user.dni} (${user.name})` : 'Autenticado'}
-            </span>
-          </div>
-
-          <div className="flex items-center justify-between">
-            <span className="text-xs uppercase font-display tracking-wider text-[#8A8A93]">
-              PREFERENCE ID
-            </span>
-            <span className="font-mono-code text-[11px] text-[#8A8A93]">
-              {activeLock.payment.preference_id}
-            </span>
-          </div>
-
-          <div className="pt-2.5 border-t border-[#242428] flex items-center justify-between">
-            <div>
-              <span className="block font-display text-xs uppercase font-bold text-[#F2EFE9]">
-                TOTAL SEÑA OBLIGATORIA
-              </span>
-              <span className="block font-mono-code text-[10px] text-[#8A8A93]">
-                100% Cuenta Central de la Plataforma
-              </span>
-            </div>
-            <span className="font-mono-code text-xl font-bold text-[#D49A2A]">
+            <span className="text-lg font-semibold text-[#2563EB]">
               $2.000 ARS
             </span>
           </div>
-
-          {/* Leyenda Obligatoria de Blindaje de Seña NO REEMBOLSABLE */}
-          <div className="p-3 rounded-sm bg-[#121214] border border-[#C85A32]/70 flex items-start gap-2">
-            <ShieldAlert className="w-4 h-4 text-[#C85A32] shrink-0 mt-0.5" />
-            <p className="font-mono-code text-[11px] text-[#F2EFE9] leading-relaxed">
-              {NON_REFUNDABLE_LEGEND}
-            </p>
-          </div>
         </div>
 
-        {/* Rejected Payment Feedback Alert */}
+        <p className="text-[11px] text-[#94A3B8]">{NON_REFUNDABLE_LEGEND}</p>
+
         {rejectedFeedback && (
-          <div className="p-4 rounded-sm bg-[#0A0A0B] border border-[#C85A32] space-y-2">
-            <div className="flex items-center gap-2 text-[#C85A32]">
-              <ShieldAlert className="w-4 h-4 shrink-0" />
-              <span className="font-display text-xs font-extrabold uppercase tracking-wider">
-                PAGO RECHAZADO SIMULADO (STATUS: REJECTED)
+          <div className="p-3.5 rounded-lg bg-[#090D16] border border-[#334155] space-y-1">
+            <div className="flex items-center gap-2 text-[#F8FAFC]">
+              <ShieldAlert className="w-4 h-4 text-[#2563EB] shrink-0" />
+              <span className="text-xs font-semibold">
+                Pago rechazado ({rejectedFeedback.mpPaymentId})
               </span>
             </div>
-            <p className="font-mono-code text-[11px] text-[#8A8A93]">
-              mp_payment_id: <span className="text-[#F2EFE9]">{rejectedFeedback.mpPaymentId}</span> ·{' '}
-              {rejectedFeedback.reason}
-            </p>
-            <p className="text-xs text-[#F2EFE9]">
-              El turno permanece bloqueado en <span className="font-mono-code text-[#D49A2A]">PENDING_PAYMENT</span> hasta que expire el reloj de 10 minutos, o podés reintentar el pago aprobado / liberar el turno ahora.
-            </p>
+            <p className="text-xs text-[#94A3B8]">{rejectedFeedback.reason}</p>
           </div>
         )}
 
-        {/* Webhook & DeepSeek Reminder Explanation */}
-        <div className="p-3 rounded-sm bg-[#0A0A0B] border border-[#242428] flex items-start gap-2.5">
-          <Bot className="w-4 h-4 text-[#D49A2A] shrink-0 mt-0.5" />
-          <p className="font-mono-code text-[11px] text-[#8A8A93] leading-relaxed">
-            Al tocar <strong className="text-[#F2EFE9]">&ldquo;Simular Pago Aprobado&rdquo;</strong> se dispara{' '}
-            <span className="text-[#D49A2A]">POST /payments/webhook</span> con un{' '}
-            <span className="text-[#F2EFE9]">mp_payment_id</span> único, pasa el turno a{' '}
-            <span className="text-[#D49A2A]">CONFIRMED</span> y encola el recordatorio en{' '}
-            <span className="text-[#F2EFE9]">ReminderQueue</span> si el barbero tiene activo el add-on de 3 USD.
-          </p>
-        </div>
-
-        {/* Action Buttons */}
+        {/* Botones de Acción (100% clickeables en PC y Mobile) */}
         <div className="space-y-2.5 pt-1">
           <button
             type="button"
             disabled={processingState !== 'IDLE' || remainingSeconds === 0}
-            onClick={handleApproveClick}
-            className="w-full min-h-[50px] px-4 rounded-sm bg-[#D49A2A] hover:bg-[#C85A32] disabled:bg-[#242428] disabled:text-[#8A8A93] text-[#0A0A0B] font-display text-xs sm:text-sm uppercase font-extrabold tracking-wider flex items-center justify-center gap-2 transition-colors"
+            onClick={handlePrimaryPaymentClick}
+            className="w-full min-h-[48px] px-4 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-50 text-[#F8FAFC] text-sm font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer pointer-events-auto"
           >
-            <CheckCircle2 className="w-4 h-4 shrink-0" />
-            <span>
-              {processingState === 'APPROVING'
-                ? 'EJECUTANDO WEBHOOK POST /payments/webhook...'
-                : 'SIMULAR PAGO APROBADO ($2.000 ARS)'}
-            </span>
+            {isExternalMpUrl ? (
+              <>
+                <CreditCard className="w-4 h-4 shrink-0" />
+                <span>Pagar en Mercado Pago · $2.000 ARS</span>
+              </>
+            ) : (
+              <>
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                <span>
+                  {processingState === 'APPROVING'
+                    ? 'Acreditando pago...'
+                    : 'Pagar y confirmar turno · $2.000 ARS'}
+                </span>
+              </>
+            )}
           </button>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <button
               type="button"
               disabled={processingState !== 'IDLE' || remainingSeconds === 0}
               onClick={handleRejectClick}
-              className="min-h-[46px] px-3 rounded-sm bg-[#0A0A0B] border border-[#C85A32] text-[#C85A32] hover:bg-[#C85A32] hover:text-[#0A0A0B] disabled:opacity-50 font-display text-xs uppercase font-bold tracking-wider flex items-center justify-center gap-1.5 transition-colors"
+              className="min-h-[44px] px-3 rounded-lg bg-[#090D16] border border-[#334155] hover:border-[#94A3B8] text-[#94A3B8] hover:text-[#F8FAFC] disabled:opacity-50 text-xs font-medium flex items-center justify-center gap-1.5 transition-colors cursor-pointer pointer-events-auto"
             >
               <XCircle className="w-4 h-4 shrink-0" />
               <span>
                 {processingState === 'REJECTING'
-                  ? 'SIMULANDO...'
-                  : 'SIMULAR PAGO RECHAZADO'}
+                  ? 'Probando...'
+                  : 'Simular pago rechazado'}
               </span>
             </button>
 
@@ -290,27 +247,15 @@ export const SandboxCheckoutModal: React.FC<SandboxCheckoutModalProps> = ({
               type="button"
               disabled={processingState !== 'IDLE'}
               onClick={handleReleaseClick}
-              className="min-h-[46px] px-3 rounded-sm bg-[#0A0A0B] border border-[#242428] hover:border-[#8A8A93] text-[#8A8A93] hover:text-[#F2EFE9] disabled:opacity-50 font-mono-code text-xs flex items-center justify-center gap-1.5 transition-colors"
+              className="min-h-[44px] px-3 rounded-lg bg-[#090D16] border border-[#1E293B] hover:border-[#334155] text-[#94A3B8] hover:text-[#F8FAFC] disabled:opacity-50 text-xs font-medium flex items-center justify-center gap-1.5 transition-colors cursor-pointer pointer-events-auto"
             >
               <span>
                 {processingState === 'RELEASING'
-                  ? 'LIBERANDO...'
-                  : 'CANCELAR Y LIBERAR TURNO'}
+                  ? 'Liberando...'
+                  : 'Cancelar y liberar horario'}
               </span>
             </button>
           </div>
-
-          {isRealMpUrl && (
-            <a
-              href={activeLock.payment.init_point}
-              target="_blank"
-              rel="noreferrer"
-              className="w-full min-h-[44px] px-4 rounded-sm bg-[#0A0A0B] border border-[#D49A2A]/60 text-[#D49A2A] font-mono-code text-xs flex items-center justify-center gap-2 hover:bg-[#D49A2A]/10 transition-colors"
-            >
-              <span>IR A PASARELA EXTERNA DE MERCADO PAGO</span>
-              <ExternalLink className="w-3.5 h-3.5" />
-            </a>
-          )}
         </div>
       </div>
     </div>

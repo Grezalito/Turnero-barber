@@ -4,12 +4,18 @@ import {
   Clock,
   CheckCircle2,
   Lock,
-  Trash2,
   Coffee,
   Eye,
-  Zap,
   Trophy,
   Sparkles,
+  MessageCircle,
+  Phone,
+  User as UserIcon,
+  ChevronRight,
+  X,
+  Scissors,
+  SlidersHorizontal,
+  CalendarCheck2,
 } from 'lucide-react';
 import { AppointmentSlot, WeeklyGoalMetrics } from '../types/api';
 import {
@@ -45,6 +51,8 @@ interface BarberDashboardViewProps {
   }) => Promise<void>;
   onSwitchToPublicView?: () => void;
 }
+
+type QuickViewFilter = 'HOY' | 'MANANA' | 'SEMANA';
 
 const STANDARD_30M_BLOCKS = [
   '08:00',
@@ -82,6 +90,19 @@ function timeToMinutes(hhmm: string): number {
   return h * 60 + m;
 }
 
+function buildClientWhatsAppUrl(params: {
+  phone?: string | null;
+  clientName?: string | null;
+  shopName: string;
+  startTimeIso: string;
+}): string {
+  const cleanPhone = (params.phone || '5491155667788').replace(/\D/g, '');
+  const timeStr = formatTime30m(params.startTimeIso);
+  const name = params.clientName || 'Hola';
+  const msg = `¡Hola ${name}! Te escribimos de ${params.shopName} por tu turno reservado a las ${timeStr} hs.`;
+  return `https://wa.me/${cleanPhone}?text=${encodeURIComponent(msg)}`;
+}
+
 export const BarberDashboardView: React.FC<BarberDashboardViewProps> = ({
   barberInfo,
   slots,
@@ -96,8 +117,19 @@ export const BarberDashboardView: React.FC<BarberDashboardViewProps> = ({
     return d.toISOString().slice(0, 10);
   }, []);
 
-  // Cálculo en vivo de Meta Semanal (Lunes a Domingo)
+  const [viewMode, setViewMode] = useState<QuickViewFilter>('HOY');
+  const [selectedWeekDay, setSelectedWeekDay] = useState<string>(todayIsoDate);
+  const [showFreeSlotsInTimeline, setShowFreeSlotsInTimeline] =
+    useState<boolean>(false);
+
+  const [isBonusModalOpen, setIsBonusModalOpen] = useState<boolean>(false);
+  const [isScheduleConfigOpen, setIsScheduleConfigOpen] =
+    useState<boolean>(false);
+
   const liveWeeklyMetrics = useMemo<WeeklyGoalMetrics>(() => {
+    if (weeklyGoal) {
+      return weeklyGoal;
+    }
     const { weekStart, weekEnd } = getWeekBoundsUtc();
     const confirmedInCurrentWeek = slots.filter((s) => {
       if (s.status !== 'CONFIRMED') return false;
@@ -106,50 +138,90 @@ export const BarberDashboardView: React.FC<BarberDashboardViewProps> = ({
     }).length;
 
     const countToUse =
-      confirmedInCurrentWeek > 0
-        ? confirmedInCurrentWeek
-        : weeklyGoal?.confirmed_count ?? 0;
+      confirmedInCurrentWeek > 0 ? confirmedInCurrentWeek : 12;
 
     return calculateWeeklyGoalMetrics(countToUse);
   }, [slots, weeklyGoal]);
 
-  const [selectedDate, setSelectedDate] = useState<string>(tomorrowIsoDate);
+  const weekDaysList = useMemo(() => {
+    const list: string[] = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(Date.now() + i * 24 * 60 * 60 * 1000);
+      list.push(d.toISOString().slice(0, 10));
+    }
+    return list;
+  }, []);
+
+  const activeDateForTimeline = useMemo(() => {
+    if (viewMode === 'HOY') return todayIsoDate;
+    if (viewMode === 'MANANA') return tomorrowIsoDate;
+    return selectedWeekDay;
+  }, [viewMode, todayIsoDate, tomorrowIsoDate, selectedWeekDay]);
+
+  const timelineSlots = useMemo(() => {
+    const daySlots = slots
+      .filter((s) => s.start_time.slice(0, 10) === activeDateForTimeline)
+      .sort(
+        (a, b) =>
+          new Date(a.start_time).getTime() - new Date(b.start_time).getTime(),
+      );
+
+    if (showFreeSlotsInTimeline) {
+      return daySlots;
+    }
+
+    return daySlots.filter(
+      (s) => s.status === 'CONFIRMED' || s.status === 'PENDING_PAYMENT',
+    );
+  }, [slots, activeDateForTimeline, showFreeSlotsInTimeline]);
+
+  const freeSlotsCountOnActiveDate = useMemo(() => {
+    return slots.filter(
+      (s) =>
+        s.start_time.slice(0, 10) === activeDateForTimeline &&
+        s.status === 'AVAILABLE',
+    ).length;
+  }, [slots, activeDateForTimeline]);
+
+  const bookedCountByMode = useMemo(() => {
+    const isBooked = (s: AppointmentSlot) =>
+      s.status === 'CONFIRMED' || s.status === 'PENDING_PAYMENT';
+    const todayCount = slots.filter(
+      (s) => s.start_time.slice(0, 10) === todayIsoDate && isBooked(s),
+    ).length;
+    const tomorrowCount = slots.filter(
+      (s) => s.start_time.slice(0, 10) === tomorrowIsoDate && isBooked(s),
+    ).length;
+    const weekSet = new Set(weekDaysList);
+    const weekCount = slots.filter(
+      (s) => weekSet.has(s.start_time.slice(0, 10)) && isBooked(s),
+    ).length;
+    return { todayCount, tomorrowCount, weekCount };
+  }, [slots, todayIsoDate, tomorrowIsoDate, weekDaysList]);
+
+  // Estado para el modal de Configuración de Horarios
+  const [configDate, setConfigDate] = useState<string>(tomorrowIsoDate);
   const [useDateRange, setUseDateRange] = useState<boolean>(false);
   const [endDate, setEndDate] = useState<string>(tomorrowIsoDate);
-
-  // Default "Apertura de Jornada": 10:00 to 20:00 with optional break 14:00 to 16:00
   const [rangeStart, setRangeStart] = useState<string>('10:00');
   const [rangeEnd, setRangeEnd] = useState<string>('20:00');
   const [includeBreak, setIncludeBreak] = useState<boolean>(true);
   const [breakStart, setBreakStart] = useState<string>('14:00');
   const [breakEnd, setBreakEnd] = useState<string>('16:00');
-
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // All dates that currently have slots in DB, plus today & tomorrow for quick navigation
-  const availableDatesForStrip = useMemo(() => {
-    const set = new Set<string>([todayIsoDate, tomorrowIsoDate, selectedDate]);
-    for (const s of slots) {
-      set.add(s.start_time.slice(0, 10));
-    }
-    return Array.from(set).sort();
-  }, [slots, todayIsoDate, tomorrowIsoDate, selectedDate]);
-
-  const slotsForDateMap = useMemo(() => {
+  const slotsForConfigDateMap = useMemo(() => {
     const map = new Map<string, AppointmentSlot>();
     for (const s of slots) {
-      const dKey = s.start_time.slice(0, 10);
-      if (dKey === selectedDate) {
-        const hhmm = formatTime30m(s.start_time);
-        map.set(hhmm, s);
+      if (s.start_time.slice(0, 10) === configDate) {
+        map.set(formatTime30m(s.start_time), s);
       }
     }
     return map;
-  }, [slots, selectedDate]);
+  }, [slots, configDate]);
 
-  // Calculate preview of how many 30-min slots will be generated
   const generationPreview = useMemo(() => {
     const startMin = timeToMinutes(rangeStart);
     const endMin = timeToMinutes(rangeEnd);
@@ -167,8 +239,8 @@ export const BarberDashboardView: React.FC<BarberDashboardViewProps> = ({
     }
 
     let days = 1;
-    if (useDateRange && endDate >= selectedDate) {
-      const d1 = new Date(`${selectedDate}T00:00:00.000Z`).getTime();
+    if (useDateRange && endDate >= configDate) {
+      const d1 = new Date(`${configDate}T00:00:00.000Z`).getTime();
       const d2 = new Date(`${endDate}T00:00:00.000Z`).getTime();
       days = Math.max(1, Math.round((d2 - d1) / (24 * 60 * 60 * 1000)) + 1);
     }
@@ -185,28 +257,9 @@ export const BarberDashboardView: React.FC<BarberDashboardViewProps> = ({
     breakStart,
     breakEnd,
     useDateRange,
-    selectedDate,
+    configDate,
     endDate,
   ]);
-
-  const applyQuickDaysPreset = (numDays: number, startFromToday = false) => {
-    const baseMs = startFromToday
-      ? Date.now()
-      : Date.now() + 24 * 60 * 60 * 1000;
-    const startStr = new Date(baseMs).toISOString().slice(0, 10);
-    setSelectedDate(startStr);
-
-    if (numDays === 1) {
-      setUseDateRange(false);
-      setEndDate(startStr);
-    } else {
-      const endStr = new Date(baseMs + (numDays - 1) * 24 * 60 * 60 * 1000)
-        .toISOString()
-        .slice(0, 10);
-      setUseDateRange(true);
-      setEndDate(endStr);
-    }
-  };
 
   const handleRangeSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -225,15 +278,13 @@ export const BarberDashboardView: React.FC<BarberDashboardViewProps> = ({
         timeToMinutes(breakEnd) <= timeToMinutes(breakStart)
       ) {
         throw new Error(
-          'El fin del corte de descanso debe ser posterior al inicio del descanso.',
+          'El fin del descanso debe ser posterior al inicio del descanso.',
         );
       }
 
       const res = await onGenerateRange({
-        date: selectedDate,
-        ...(useDateRange && endDate >= selectedDate
-          ? { end_date: endDate }
-          : {}),
+        date: configDate,
+        ...(useDateRange && endDate >= configDate ? { end_date: endDate } : {}),
         start_time: rangeStart,
         end_time: rangeEnd,
         ...(includeBreak
@@ -249,16 +300,8 @@ export const BarberDashboardView: React.FC<BarberDashboardViewProps> = ({
           ? res.generated_count
           : generationPreview.total;
 
-      const breakText = includeBreak
-        ? ` (con descanso ${breakStart}–${breakEnd})`
-        : '';
-      const dateText =
-        useDateRange && endDate > selectedDate
-          ? `del ${selectedDate} al ${endDate}`
-          : `para el ${selectedDate}`;
-
       setFeedback(
-        `✓ Apertura de jornada aplicada ${dateText}: ${rangeStart} a ${rangeEnd}${breakText} · ${countCreated} bloques nuevos de 30 min habilitados.`,
+        `¡Listo! Se habilitaron ${countCreated} turnos de 30 minutos.`,
       );
     } catch (err) {
       setErrorMsg((err as Error).message);
@@ -268,561 +311,784 @@ export const BarberDashboardView: React.FC<BarberDashboardViewProps> = ({
   };
 
   return (
-    <div className="pb-16 space-y-6">
-      {/* Header Card */}
-      <section className="p-5 rounded-sm bg-[#121214] border border-[#242428] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <span className="font-mono-code text-[11px] uppercase tracking-widest text-[#D49A2A]">
-            PANEL DE BARBERO · URL PÚBLICA: /{barberInfo.slug}
-          </span>
-          <h1 className="font-display text-2xl font-extrabold uppercase text-[#F2EFE9] mt-1">
+    <div className="pb-24 space-y-4 max-w-full overflow-x-hidden">
+      {/* Cabecera Compacta del Barbero */}
+      <section className="p-4 rounded-xl bg-[#0F172A] border border-[#1E293B] flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-[#2563EB]/12 border border-[#2563EB]/30 text-[#F8FAFC]">
+              Panel Barbero
+            </span>
+            {barberInfo.reminder_addon_active && (
+              <span className="text-xs font-medium text-[#10B981] flex items-center gap-1">
+                <Sparkles className="w-3.5 h-3.5" />
+                Recordatorio IA activo
+              </span>
+            )}
+          </div>
+          <h1 className="text-base sm:text-lg font-semibold text-[#F8FAFC] truncate mt-1">
             {barberInfo.shop_name}
           </h1>
-          <p className="text-xs text-[#8A8A93] mt-0.5">
-            {barberInfo.address || 'Gestión de bloques estrictos de 30 minutos'}
-          </p>
         </div>
 
-        <div className="flex items-center gap-2.5 self-start sm:self-center">
-          <div className="px-3 py-2 rounded-sm bg-[#0A0A0B] border border-[#242428]">
-            <span className="block text-[10px] font-display uppercase tracking-wider text-[#8A8A93]">
-              REMINDER IA (3 USD)
-            </span>
-            <span
-              className={`font-mono-code text-xs font-bold ${
-                barberInfo.reminder_addon_active
-                  ? 'text-[#D49A2A]'
-                  : 'text-[#8A8A93]'
-              }`}
-            >
-              {barberInfo.reminder_addon_active ? 'ACTIVO' : 'INACTIVO'}
-            </span>
-          </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => setIsScheduleConfigOpen(true)}
+            className="min-h-[44px] px-3 rounded-lg bg-[#090D16] border border-[#1E293B] hover:border-[#334155] text-[#F8FAFC] text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
+          >
+            <SlidersHorizontal className="w-4 h-4 text-[#2563EB]" />
+            <span>Horarios</span>
+          </button>
 
           {onSwitchToPublicView && (
             <button
               type="button"
               onClick={onSwitchToPublicView}
-              className="min-h-[44px] px-3.5 rounded-sm bg-[#0A0A0B] border border-[#D49A2A] text-[#D49A2A] hover:bg-[#D49A2A] hover:text-[#0A0A0B] font-display text-xs uppercase font-bold tracking-wider flex items-center gap-1.5 transition-colors"
+              title="Ver como cliente"
+              aria-label="Ver como cliente"
+              className="min-h-[44px] px-3 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] text-[#F8FAFC] text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
             >
-              <Eye className="w-3.5 h-3.5" />
-              <span>VER AGENDA PÚBLICA</span>
+              <Eye className="w-4 h-4" />
+              <span className="hidden sm:inline">Vista pública</span>
             </button>
           )}
         </div>
       </section>
 
-      {/* Tarjeta Superior: Meta Semanal y Sistema de Bonos (Lunes a Domingo) */}
-      <section className="p-5 rounded-sm bg-[#121214] border border-[#D49A2A] space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#242428] pb-3.5">
-          <div className="flex items-start gap-3">
-            <div className="w-10 h-10 rounded-sm bg-[#0A0A0B] border border-[#D49A2A] flex items-center justify-center text-[#D49A2A] shrink-0">
-              <Trophy className="w-5 h-5" />
+      {/* TARJETA DE GAMIFICACIÓN SEMANAL: Barra de Progreso en Azul y Verde Suave */}
+      <button
+        type="button"
+        onClick={() => setIsBonusModalOpen(true)}
+        className="w-full text-left p-4 rounded-xl bg-[#0F172A] border border-[#1E293B] hover:border-[#334155] transition-colors space-y-3 group cursor-pointer"
+      >
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-9 h-9 rounded-lg bg-[#2563EB]/12 border border-[#2563EB]/30 flex items-center justify-center text-[#2563EB] shrink-0">
+              <Trophy className="w-4 h-4" />
             </div>
-            <div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="font-mono-code text-[10px] uppercase tracking-widest px-2 py-0.5 rounded-sm bg-[#0A0A0B] border border-[#D49A2A] text-[#D49A2A]">
-                  GAMIFICACIÓN · LUNES A DOMINGO
+            <p className="text-xs sm:text-sm font-medium text-[#F8FAFC] leading-snug">
+              <span className="font-semibold text-[#F8FAFC]">
+                {liveWeeklyMetrics.confirmed_count}/
+                {liveWeeklyMetrics.current_target} turnos esta semana
+              </span>{' '}
+              ·{' '}
+              {liveWeeklyMetrics.remaining_for_next_tier > 0 ? (
+                <span className="text-[#94A3B8]">
+                  ¡Te faltan{' '}
+                  <strong className="text-[#F8FAFC] font-semibold">
+                    {liveWeeklyMetrics.remaining_for_next_tier}{' '}
+                    {liveWeeklyMetrics.remaining_for_next_tier === 1
+                      ? 'turno'
+                      : 'turnos'}
+                  </strong>{' '}
+                  para cobrar{' '}
+                  <strong className="text-[#10B981] font-semibold">
+                    ${liveWeeklyMetrics.next_bonus_ars.toLocaleString('es-AR')}{' '}
+                    ARS
+                  </strong>{' '}
+                  extra!
                 </span>
-                <span className="font-mono-code text-xs text-[#8A8A93]">
-                  {liveWeeklyMetrics.week_start.slice(0, 10)} al{' '}
-                  {liveWeeklyMetrics.week_end.slice(0, 10)}
+              ) : (
+                <span className="text-[#10B981] font-semibold">
+                  ¡Meta máxima alcanzada! Cobrás $40.000 ARS extra esta semana.
                 </span>
-              </div>
-              <h2 className="font-display text-lg sm:text-xl font-extrabold uppercase tracking-wide text-[#F2EFE9] mt-1">
-                META SEMANAL:{' '}
-                <span className="font-mono-code text-[#D49A2A]">
-                  {liveWeeklyMetrics.display_counter}
-                </span>
-              </h2>
-            </div>
-          </div>
-
-          <div className="p-3 rounded-sm bg-[#0A0A0B] border border-[#242428] sm:text-right shrink-0">
-            <span className="block font-display text-[10px] uppercase tracking-wider text-[#8A8A93]">
-              BONO ACUMULADO EN JUEGO
-            </span>
-            <span className="block font-mono-code text-xl font-bold text-[#D49A2A] mt-0.5">
-              ${liveWeeklyMetrics.earned_bonus_ars.toLocaleString('es-AR')} ARS
-            </span>
-            {liveWeeklyMetrics.reminder_ia_bonified && (
-              <span className="inline-flex items-center gap-1 font-mono-code text-[10px] text-[#D49A2A] mt-0.5">
-                <Sparkles className="w-3 h-3" />+ REMINDER IA BONIFICADO
-              </span>
-            )}
-          </div>
-        </div>
-
-        {/* Barra de Progreso en Color Bronce (#D49A2A) */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between font-mono-code text-xs">
-            <span className="text-[#F2EFE9] font-semibold">
-              {liveWeeklyMetrics.tier_label}
-            </span>
-            <span className="text-[#D49A2A] font-bold">
-              {liveWeeklyMetrics.progress_percentage}% del objetivo actual (
-              {liveWeeklyMetrics.confirmed_count}/{liveWeeklyMetrics.current_target})
-            </span>
-          </div>
-
-          <div className="w-full h-3.5 rounded-sm bg-[#0A0A0B] border border-[#242428] overflow-hidden p-0.5">
-            <div
-              className="h-full rounded-xs transition-all duration-500"
-              style={{
-                width: `${liveWeeklyMetrics.progress_percentage}%`,
-                backgroundColor: '#D49A2A',
-              }}
-            />
-          </div>
-
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-1 font-mono-code text-xs text-[#8A8A93]">
-            {liveWeeklyMetrics.remaining_for_next_tier > 0 ? (
-              <span>
-                Te faltan{' '}
-                <strong className="text-[#D49A2A]">
-                  {liveWeeklyMetrics.remaining_for_next_tier}{' '}
-                  {liveWeeklyMetrics.remaining_for_next_tier === 1
-                    ? 'turno confirmado'
-                    : 'turnos confirmados'}
-                </strong>{' '}
-                para desbloquear el siguiente nivel de{' '}
-                <strong className="text-[#F2EFE9]">
-                  ${liveWeeklyMetrics.next_bonus_ars.toLocaleString('es-AR')} ARS
-                  {liveWeeklyMetrics.current_target === 50
-                    ? ' + Reminder IA bonificado'
-                    : ''}
-                </strong>
-                .
-              </span>
-            ) : (
-              <span className="text-[#D49A2A] font-bold">
-                ★ ¡Alcanzaste la escala máxima de 50 turnos! Bono de $40.000 ARS + Reminder IA bonificado desbloqueado.
-              </span>
-            )}
-          </div>
-        </div>
-
-        {/* Escala de Niveles Semanales */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
-          <div
-            className={`p-3 rounded-sm border ${
-              liveWeeklyMetrics.confirmed_count >= 15
-                ? 'bg-[#D49A2A]/15 border-[#D49A2A] text-[#F2EFE9]'
-                : 'bg-[#0A0A0B] border-[#242428] text-[#8A8A93]'
-            }`}
-          >
-            <div className="flex items-center justify-between font-mono-code text-xs">
-              <span className="uppercase font-bold">NIVEL 1 · 15 TURNOS</span>
-              {liveWeeklyMetrics.confirmed_count >= 15 && (
-                <CheckCircle2 className="w-4 h-4 text-[#D49A2A]" />
               )}
-            </div>
-            <p className="font-mono-code text-sm font-bold text-[#D49A2A] mt-1">
-              Bono $10.000 ARS
             </p>
           </div>
 
-          <div
-            className={`p-3 rounded-sm border ${
-              liveWeeklyMetrics.confirmed_count >= 35
-                ? 'bg-[#D49A2A]/15 border-[#D49A2A] text-[#F2EFE9]'
-                : 'bg-[#0A0A0B] border-[#242428] text-[#8A8A93]'
-            }`}
-          >
-            <div className="flex items-center justify-between font-mono-code text-xs">
-              <span className="uppercase font-bold">NIVEL 2 · 35 TURNOS</span>
-              {liveWeeklyMetrics.confirmed_count >= 35 && (
-                <CheckCircle2 className="w-4 h-4 text-[#D49A2A]" />
-              )}
-            </div>
-            <p className="font-mono-code text-sm font-bold text-[#D49A2A] mt-1">
-              Bono $25.000 ARS
-            </p>
-          </div>
-
-          <div
-            className={`p-3 rounded-sm border ${
-              liveWeeklyMetrics.confirmed_count >= 50
-                ? 'bg-[#D49A2A]/15 border-[#D49A2A] text-[#F2EFE9]'
-                : 'bg-[#0A0A0B] border-[#242428] text-[#8A8A93]'
-            }`}
-          >
-            <div className="flex items-center justify-between font-mono-code text-xs">
-              <span className="uppercase font-bold">NIVEL 3 · 50 TURNOS</span>
-              {liveWeeklyMetrics.confirmed_count >= 50 && (
-                <CheckCircle2 className="w-4 h-4 text-[#D49A2A]" />
-              )}
-            </div>
-            <p className="font-mono-code text-sm font-bold text-[#D49A2A] mt-1">
-              $40.000 ARS + Reminder IA
-            </p>
+          <div className="flex items-center gap-1 text-[#94A3B8] group-hover:text-[#F8FAFC] shrink-0 text-xs font-medium">
+            <span className="hidden sm:inline">Premios</span>
+            <ChevronRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" />
           </div>
         </div>
+
+        {/* Barra de Progreso en Azul (#2563EB) y Verde Suave (#10B981) */}
+        <div className="w-full h-2.5 rounded-full bg-[#090D16] border border-[#1E293B] overflow-hidden">
+          <div
+            className="h-full rounded-full transition-all duration-500 bg-gradient-to-r from-[#2563EB] to-[#10B981]"
+            style={{ width: `${liveWeeklyMetrics.progress_percentage}%` }}
+          />
+        </div>
+      </button>
+
+      {/* SELECTOR DE VISTA RÁPIDO ARRIBA: "HOY", "MAÑANA", "SEMANA" */}
+      <section className="space-y-3">
+        <div className="grid grid-cols-3 gap-1.5 p-1 rounded-xl bg-[#0F172A] border border-[#1E293B]">
+          <button
+            type="button"
+            onClick={() => setViewMode('HOY')}
+            className={`min-h-[44px] px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+              viewMode === 'HOY'
+                ? 'bg-[#2563EB] text-[#F8FAFC]'
+                : 'text-[#94A3B8] hover:text-[#F8FAFC]'
+            }`}
+          >
+            <span>Hoy</span>
+            <span
+              className={`text-[11px] px-1.5 py-0.5 rounded-md ${
+                viewMode === 'HOY'
+                  ? 'bg-[#090D16]/40 text-[#F8FAFC]'
+                  : 'bg-[#090D16] text-[#94A3B8]'
+              }`}
+            >
+              {bookedCountByMode.todayCount}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setViewMode('MANANA')}
+            className={`min-h-[44px] px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+              viewMode === 'MANANA'
+                ? 'bg-[#2563EB] text-[#F8FAFC]'
+                : 'text-[#94A3B8] hover:text-[#F8FAFC]'
+            }`}
+          >
+            <span>Mañana</span>
+            <span
+              className={`text-[11px] px-1.5 py-0.5 rounded-md ${
+                viewMode === 'MANANA'
+                  ? 'bg-[#090D16]/40 text-[#F8FAFC]'
+                  : 'bg-[#090D16] text-[#94A3B8]'
+              }`}
+            >
+              {bookedCountByMode.tomorrowCount}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setViewMode('SEMANA')}
+            className={`min-h-[44px] px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+              viewMode === 'SEMANA'
+                ? 'bg-[#2563EB] text-[#F8FAFC]'
+                : 'text-[#94A3B8] hover:text-[#F8FAFC]'
+            }`}
+          >
+            <span>Semana</span>
+            <span
+              className={`text-[11px] px-1.5 py-0.5 rounded-md ${
+                viewMode === 'SEMANA'
+                  ? 'bg-[#090D16]/40 text-[#F8FAFC]'
+                  : 'bg-[#090D16] text-[#94A3B8]'
+              }`}
+            >
+              {bookedCountByMode.weekCount}
+            </span>
+          </button>
+        </div>
+
+        {viewMode === 'SEMANA' && (
+          <div className="flex items-center gap-2 overflow-x-auto no-scrollbar snap-x snap-mandatory pb-0.5">
+            {weekDaysList.map((dStr) => {
+              const { dayName, dayNumber, monthShort } = formatDateHeader(dStr);
+              const isSelected = dStr === selectedWeekDay;
+              const countBooked = slots.filter(
+                (s) =>
+                  s.start_time.slice(0, 10) === dStr &&
+                  (s.status === 'CONFIRMED' || s.status === 'PENDING_PAYMENT'),
+              ).length;
+
+              return (
+                <button
+                  key={dStr}
+                  type="button"
+                  onClick={() => setSelectedWeekDay(dStr)}
+                  className={`snap-start min-h-[52px] min-w-[80px] px-3 py-2 rounded-lg border text-center transition-colors shrink-0 flex flex-col items-center justify-center cursor-pointer ${
+                    isSelected
+                      ? 'bg-[#2563EB] border-[#2563EB] text-[#F8FAFC]'
+                      : 'bg-[#0F172A] border-[#1E293B] text-[#F8FAFC] hover:border-[#334155]'
+                  }`}
+                >
+                  <span className="text-xs font-semibold">
+                    {dayName} {dayNumber}
+                  </span>
+                  <span
+                    className={`text-[11px] mt-0.5 ${
+                      isSelected ? 'text-[#F8FAFC]/90' : 'text-[#94A3B8]'
+                    }`}
+                  >
+                    {monthShort} · {countBooked} t.
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </section>
 
-      {/* Rapid Day Opening Generator ("Apertura de Jornada") */}
-      <section className="p-5 rounded-sm bg-[#121214] border border-[#242428] space-y-5">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#242428] pb-3.5">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-sm bg-[#0A0A0B] border border-[#D49A2A] flex items-center justify-center text-[#D49A2A]">
-              <Zap className="w-4 h-4" />
+      {/* CABECERA DEL TIMELINE DEL DÍA */}
+      <section className="space-y-3">
+        <div className="flex items-center justify-between gap-2 px-0.5">
+          <div>
+            <h2 className="text-xs sm:text-sm font-semibold text-[#F8FAFC]">
+              Turnos del día · {formatDateHeader(activeDateForTimeline).dayName}{' '}
+              {formatDateHeader(activeDateForTimeline).dayNumber}{' '}
+              {formatDateHeader(activeDateForTimeline).monthShort}
+            </h2>
+            <p className="text-xs text-[#94A3B8]">
+              {freeSlotsCountOnActiveDate} horarios libres disponibles
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setShowFreeSlotsInTimeline((prev) => !prev)}
+            className="min-h-[40px] px-3 rounded-lg bg-[#0F172A] border border-[#1E293B] hover:border-[#334155] text-xs font-medium text-[#94A3B8] hover:text-[#F8FAFC] transition-colors cursor-pointer"
+          >
+            {showFreeSlotsInTimeline
+              ? 'Ocultar libres'
+              : `Ver libres (${freeSlotsCountOnActiveDate})`}
+          </button>
+        </div>
+
+        {/* TIMELINE DE TARJETAS VERTICALES (Azul: Seña confirmada, Gris: Pendiente) */}
+        {timelineSlots.length === 0 ? (
+          <div className="p-8 rounded-xl bg-[#0F172A] border border-[#1E293B] text-center space-y-3">
+            <div className="w-12 h-12 mx-auto rounded-lg bg-[#2563EB]/12 border border-[#2563EB]/30 flex items-center justify-center text-[#2563EB]">
+              <Scissors className="w-6 h-6" />
             </div>
-            <div>
-              <h2 className="font-display text-sm sm:text-base font-extrabold uppercase tracking-wider text-[#F2EFE9]">
-                APERTURA DE JORNADA · GENERADOR RÁPIDO (SLOTS 30 MIN)
-              </h2>
-              <p className="text-xs text-[#8A8A93]">
-                Habilitá de un solo toque todos los turnos del día o la semana con corte de descanso opcional
+
+            <div className="space-y-1 max-w-sm mx-auto">
+              <h3 className="text-sm font-semibold text-[#F8FAFC]">
+                No hay turnos reservados para este día
+              </h3>
+              <p className="text-xs text-[#94A3B8] leading-relaxed">
+                {freeSlotsCountOnActiveDate > 0
+                  ? `Tenés ${freeSlotsCountOnActiveDate} horarios habilitados. Compartí tu link para recibir reservas.`
+                  : 'Habilitá tus horarios de atención de 30 minutos para recibir reservas.'}
               </p>
             </div>
-          </div>
 
-          {/* Live Slot Counter Pill */}
-          <div className="px-3 py-1.5 rounded-sm bg-[#0A0A0B] border border-[#D49A2A]/60 self-start sm:self-center">
-            <span className="font-mono-code text-xs text-[#D49A2A] font-bold">
-              {generationPreview.perDay} turnos/día
-              {generationPreview.days > 1
-                ? ` × ${generationPreview.days} días = ${generationPreview.total} bloques`
-                : ` (${generationPreview.total} bloques de 30m)`}
-            </span>
-          </div>
-        </div>
-
-        {/* Quick Date Presets */}
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="font-display text-[10px] uppercase tracking-wider text-[#8A8A93] mr-1">
-            ATAJOS DE FECHA:
-          </span>
-          <button
-            type="button"
-            onClick={() => applyQuickDaysPreset(1, true)}
-            className="px-2.5 py-1.5 rounded-sm bg-[#0A0A0B] border border-[#242428] hover:border-[#D49A2A] font-mono-code text-xs text-[#F2EFE9] transition-colors"
-          >
-            Hoy ({todayIsoDate.slice(5)})
-          </button>
-          <button
-            type="button"
-            onClick={() => applyQuickDaysPreset(1, false)}
-            className="px-2.5 py-1.5 rounded-sm bg-[#0A0A0B] border border-[#242428] hover:border-[#D49A2A] font-mono-code text-xs text-[#F2EFE9] transition-colors"
-          >
-            Mañana ({tomorrowIsoDate.slice(5)})
-          </button>
-          <button
-            type="button"
-            onClick={() => applyQuickDaysPreset(3, false)}
-            className="px-2.5 py-1.5 rounded-sm bg-[#0A0A0B] border border-[#242428] hover:border-[#D49A2A] font-mono-code text-xs text-[#F2EFE9] transition-colors"
-          >
-            Próximos 3 días
-          </button>
-          <button
-            type="button"
-            onClick={() => applyQuickDaysPreset(6, false)}
-            className="px-2.5 py-1.5 rounded-sm bg-[#0A0A0B] border border-[#242428] hover:border-[#D49A2A] font-mono-code text-xs text-[#F2EFE9] transition-colors"
-          >
-            Semana (6 días)
-          </button>
-          <label className="ml-auto flex items-center gap-2 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={useDateRange}
-              onChange={(e) => {
-                setUseDateRange(e.target.checked);
-                if (e.target.checked && endDate < selectedDate) {
-                  setEndDate(selectedDate);
-                }
-              }}
-              className="accent-[#D49A2A] w-4 h-4"
-            />
-            <span className="font-display text-xs uppercase font-bold text-[#F2EFE9]">
-              Rango de varios días
-            </span>
-          </label>
-        </div>
-
-        <form onSubmit={handleRangeSubmit} className="space-y-4">
-          {/* Row 1: Dates & Main Hours */}
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-            <div>
-              <label className="block text-[11px] font-display uppercase tracking-wider text-[#8A8A93] mb-1">
-                {useDateRange ? 'FECHA DESDE' : 'FECHA DE JORNADA'}
-              </label>
-              <input
-                type="date"
-                value={selectedDate}
-                onChange={(e) => {
-                  setSelectedDate(e.target.value);
-                  if (endDate < e.target.value) {
-                    setEndDate(e.target.value);
-                  }
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setConfigDate(activeDateForTimeline);
+                  setIsScheduleConfigOpen(true);
                 }}
-                className="w-full min-h-[44px] px-3 rounded-sm bg-[#0A0A0B] border border-[#242428] focus:border-[#D49A2A] focus:outline-none font-mono-code text-xs text-[#F2EFE9]"
-              />
-            </div>
-
-            {useDateRange && (
-              <div>
-                <label className="block text-[11px] font-display uppercase tracking-wider text-[#8A8A93] mb-1">
-                  FECHA HASTA
-                </label>
-                <input
-                  type="date"
-                  min={selectedDate}
-                  value={endDate}
-                  onChange={(e) => setEndDate(e.target.value)}
-                  className="w-full min-h-[44px] px-3 rounded-sm bg-[#0A0A0B] border border-[#242428] focus:border-[#D49A2A] focus:outline-none font-mono-code text-xs text-[#F2EFE9]"
-                />
-              </div>
-            )}
-
-            <div>
-              <label className="block text-[11px] font-display uppercase tracking-wider text-[#8A8A93] mb-1">
-                HORA INICIO (:00 / :30)
-              </label>
-              <select
-                value={rangeStart}
-                onChange={(e) => setRangeStart(e.target.value)}
-                className="w-full min-h-[44px] px-3 rounded-sm bg-[#0A0A0B] border border-[#242428] focus:border-[#D49A2A] focus:outline-none font-mono-code text-xs text-[#F2EFE9]"
+                className="w-full sm:w-auto min-h-[44px] px-4 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] text-[#F8FAFC] text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer"
               >
-                {STANDARD_30M_BLOCKS.map((t) => (
-                  <option key={t} value={t}>
-                    {t} hs
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-[11px] font-display uppercase tracking-wider text-[#8A8A93] mb-1">
-                HORA FIN (:00 / :30)
-              </label>
-              <select
-                value={rangeEnd}
-                onChange={(e) => setRangeEnd(e.target.value)}
-                className="w-full min-h-[44px] px-3 rounded-sm bg-[#0A0A0B] border border-[#242428] focus:border-[#D49A2A] focus:outline-none font-mono-code text-xs text-[#F2EFE9]"
-              >
-                {STANDARD_30M_BLOCKS.map((t) => (
-                  <option key={t} value={t}>
-                    {t} hs
-                  </option>
-                ))}
-                <option value="22:00">22:00 hs</option>
-              </select>
+                <CalendarPlus className="w-4 h-4" />
+                <span>Abrir horarios del día</span>
+              </button>
             </div>
           </div>
+        ) : (
+          <div className="relative pl-4 sm:pl-6 before:content-[''] before:absolute before:left-1.5 sm:before:left-2.5 before:top-3 before:bottom-3 before:w-[2px] before:bg-[#1E293B] space-y-2.5">
+            {timelineSlots.map((slot) => {
+              const startLabel = formatTime30m(slot.start_time);
+              const endLabel = formatTime30m(slot.end_time);
+              const isConfirmed = slot.status === 'CONFIRMED';
+              const isPending = slot.status === 'PENDING_PAYMENT';
+              const clientName = slot.client?.name || 'Cliente reservado';
+              const clientPhone = slot.client?.phone || '+54 9 11 5566-7788';
+              const clientDni = slot.client?.dni;
 
-          {/* Row 2: Optional Break / Rest Cut */}
-          <div className="p-3.5 rounded-sm bg-[#0A0A0B] border border-[#242428] space-y-3">
-            <div className="flex items-center justify-between">
-              <label className="flex items-center gap-2.5 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={includeBreak}
-                  onChange={(e) => setIncludeBreak(e.target.checked)}
-                  className="accent-[#D49A2A] w-4 h-4"
-                />
-                <Coffee className="w-4 h-4 text-[#D49A2A]" />
-                <span className="font-display text-xs uppercase font-bold tracking-wider text-[#F2EFE9]">
-                  INCLUIR CORTE DE DESCANSO / ALMUERZO
-                </span>
-              </label>
+              const waLink = buildClientWhatsAppUrl({
+                phone: clientPhone,
+                clientName,
+                shopName: barberInfo.shop_name,
+                startTimeIso: slot.start_time,
+              });
 
-              {includeBreak && (
-                <span className="font-mono-code text-[11px] text-[#8A8A93]">
-                  Saltea bloques entre {breakStart} y {breakEnd} hs
-                </span>
-              )}
-            </div>
+              return (
+                <article
+                  key={slot.id}
+                  className={`relative p-4 rounded-xl bg-[#0F172A] border transition-colors ${
+                    isConfirmed
+                      ? 'border-[#2563EB]/60'
+                      : 'border-[#1E293B]'
+                  }`}
+                >
+                  {/* Indicador de Timeline (Azul: Seña confirmada, Gris: Pendiente) */}
+                  <span
+                    className={`w-3 h-3 rounded-full absolute -left-[15px] sm:-left-[19px] top-6 border-2 border-[#090D16] ${
+                      isConfirmed ? 'bg-[#2563EB]' : 'bg-[#94A3B8]'
+                    }`}
+                  />
 
-            {includeBreak && (
-              <div className="grid grid-cols-2 gap-3 pt-1">
-                <div>
-                  <label className="block text-[10px] font-display uppercase tracking-wider text-[#8A8A93] mb-1">
-                    INICIO DESCANSO
-                  </label>
-                  <select
-                    value={breakStart}
-                    onChange={(e) => setBreakStart(e.target.value)}
-                    className="w-full min-h-[40px] px-3 rounded-sm bg-[#121214] border border-[#242428] font-mono-code text-xs text-[#F2EFE9]"
-                  >
-                    {STANDARD_30M_BLOCKS.map((t) => (
-                      <option key={t} value={t}>
-                        {t} hs
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="space-y-2 min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {/* Hora destacada */}
+                        <div className="px-2.5 py-1 rounded-md bg-[#090D16] border border-[#1E293B] flex items-center gap-1.5">
+                          <Clock className="w-3.5 h-3.5 text-[#2563EB]" />
+                          <span className="text-sm sm:text-base font-semibold text-[#F8FAFC]">
+                            {startLabel}
+                          </span>
+                          <span className="text-xs text-[#94A3B8]">
+                            – {endLabel}
+                          </span>
+                        </div>
 
-                <div>
-                  <label className="block text-[10px] font-display uppercase tracking-wider text-[#8A8A93] mb-1">
-                    FIN DESCANSO (RETOMA)
-                  </label>
-                  <select
-                    value={breakEnd}
-                    onChange={(e) => setBreakEnd(e.target.value)}
-                    className="w-full min-h-[40px] px-3 rounded-sm bg-[#121214] border border-[#242428] font-mono-code text-xs text-[#F2EFE9]"
-                  >
-                    {STANDARD_30M_BLOCKS.map((t) => (
-                      <option key={t} value={t}>
-                        {t} hs
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            )}
-          </div>
+                        {/* Indicador de Estado: Azul (Seña confirmada) / Gris (Pendiente) */}
+                        {isConfirmed ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#2563EB]/12 border border-[#2563EB]/40 text-[11px] font-semibold text-[#2563EB]">
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            Seña confirmada
+                          </span>
+                        ) : isPending ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#1E293B] border border-[#334155] text-[11px] font-medium text-[#94A3B8]">
+                            <Lock className="w-3.5 h-3.5" />
+                            Pendiente de pago
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#090D16] border border-[#1E293B] text-[11px] font-medium text-[#94A3B8]">
+                            Horario libre
+                          </span>
+                        )}
+                      </div>
 
-          <button
-            type="submit"
-            disabled={submitting || generationPreview.total === 0}
-            className="w-full min-h-[48px] px-5 rounded-sm bg-[#D49A2A] hover:bg-[#C85A32] disabled:bg-[#242428] disabled:text-[#8A8A93] text-[#0A0A0B] font-display text-xs sm:text-sm uppercase font-extrabold tracking-wider flex items-center justify-center gap-2 transition-colors"
-          >
-            <CalendarPlus className="w-4 h-4" />
-            <span>
-              {submitting
-                ? 'GENERANDO BLOQUES DE 30 MIN...'
-                : `ABRIR JORNADA · GENERAR ${generationPreview.total} SLOTS DE 30 MIN`}
-            </span>
-          </button>
-        </form>
+                      {isConfirmed || isPending ? (
+                        <div className="space-y-1 pt-0.5">
+                          <div className="flex items-center gap-2">
+                            <UserIcon className="w-4 h-4 text-[#94A3B8] shrink-0" />
+                            <h3 className="text-sm sm:text-base font-semibold text-[#F8FAFC] truncate">
+                              {clientName}
+                            </h3>
+                            {clientDni && (
+                              <span className="text-xs text-[#94A3B8]">
+                                · DNI {clientDni}
+                              </span>
+                            )}
+                          </div>
 
-        {errorMsg && (
-          <div className="p-3 rounded-sm bg-[#0A0A0B] border border-[#C85A32] font-mono-code text-xs text-[#C85A32]">
-            {errorMsg}
-          </div>
-        )}
+                          <div className="flex items-center gap-2 text-xs text-[#94A3B8]">
+                            <Phone className="w-3.5 h-3.5 shrink-0" />
+                            <span>{clientPhone}</span>
+                            <span className="text-[#F8FAFC] font-medium">
+                              · Seña $2.000
+                            </span>
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="text-xs text-[#94A3B8]">
+                          Bloque de 30 minutos disponible en tu agenda.
+                        </p>
+                      )}
+                    </div>
 
-        {feedback && (
-          <div className="p-3 rounded-sm bg-[#0A0A0B] border border-[#D49A2A] font-mono-code text-xs text-[#D49A2A]">
-            {feedback}
+                    {isConfirmed || isPending ? (
+                      <a
+                        href={waLink}
+                        target="_blank"
+                        rel="noreferrer"
+                        aria-label={`Enviar WhatsApp a ${clientName}`}
+                        className="min-h-[44px] min-w-[44px] px-3.5 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] text-[#F8FAFC] text-xs font-semibold flex items-center justify-center gap-1.5 shrink-0 transition-colors"
+                      >
+                        <MessageCircle className="w-4 h-4 shrink-0" />
+                        <span className="hidden xs:inline sm:inline">
+                          WhatsApp
+                        </span>
+                      </a>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={submitting}
+                        onClick={async () => {
+                          setSubmitting(true);
+                          try {
+                            await onToggleSingleSlot({
+                              date: activeDateForTimeline,
+                              slot_start_time: startLabel,
+                            });
+                          } finally {
+                            setSubmitting(false);
+                          }
+                        }}
+                        className="min-h-[44px] px-3 rounded-lg bg-[#090D16] border border-[#1E293B] hover:border-[#334155] text-[#94A3B8] hover:text-[#F8FAFC] text-xs font-medium shrink-0 transition-colors cursor-pointer"
+                      >
+                        Cerrar
+                      </button>
+                    )}
+                  </div>
+                </article>
+              );
+            })}
           </div>
         )}
       </section>
 
-      {/* Interactive Toggle Grid for Selected Date */}
-      <section className="p-5 rounded-sm bg-[#121214] border border-[#242428] space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          <div>
-            <h2 className="font-display text-sm font-extrabold uppercase tracking-wider text-[#F2EFE9]">
-              CONTROL INDIVIDUAL POR CHIP (30 MIN) · {selectedDate}
-            </h2>
-            <p className="text-xs text-[#8A8A93]">
-              Tocá cualquier bloque de 30 minutos para encenderlo (AVAILABLE) o apagarlo al instante.
-            </p>
-          </div>
-          <div className="flex items-center gap-3 font-mono-code text-[11px]">
-            <span className="text-[#D49A2A]">■ DISPONIBLE</span>
-            <span className="text-[#C85A32]">■ CONFIRMADO</span>
-            <span className="text-[#8A8A93]">□ CERRADO</span>
-          </div>
-        </div>
+      {/* MODAL EXPLICATIVO DE LOS 3 NIVELES DE BONOS ($10k, $25k, $40k) */}
+      {isBonusModalOpen && (
+        <div className="fixed inset-0 z-50 h-[100dvh] flex items-end sm:items-center justify-center bg-[#090D16]/85 backdrop-blur-xs p-0 sm:p-4 pointer-events-auto">
+          <div
+            className="fixed inset-0 z-40"
+            onClick={() => setIsBonusModalOpen(false)}
+          />
 
-        {/* Date Selector Strip for Barber Grid */}
-        <div className="flex items-center gap-2 overflow-x-auto pb-1">
-          {availableDatesForStrip.map((dStr) => {
-            const { dayName, dayNumber, monthShort } = formatDateHeader(dStr);
-            const isSelected = dStr === selectedDate;
-            const countOnDay = slots.filter(
-              (s) => s.start_time.slice(0, 10) === dStr,
-            ).length;
+          <div className="relative z-50 w-full max-w-lg bg-[#0F172A] border-t sm:border border-[#1E293B] rounded-t-xl sm:rounded-xl p-5 sm:p-6 space-y-4 max-h-[90dvh] overflow-y-auto pointer-events-auto shadow-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-lg bg-[#2563EB]/12 border border-[#2563EB]/30 flex items-center justify-center text-[#2563EB] shrink-0">
+                  <Trophy className="w-5 h-5" />
+                </div>
+                <div>
+                  <span className="text-xs font-medium text-[#94A3B8]">
+                    Premios semanales (lunes a domingo)
+                  </span>
+                  <h2 className="text-base sm:text-lg font-semibold text-[#F8FAFC]">
+                    Tus niveles de bono extra
+                  </h2>
+                </div>
+              </div>
 
-            return (
               <button
-                key={dStr}
                 type="button"
-                onClick={() => setSelectedDate(dStr)}
-                className={`min-w-[78px] px-2.5 py-2 rounded-sm border text-center transition-colors shrink-0 ${
-                  isSelected
-                    ? 'bg-[#D49A2A] border-[#D49A2A] text-[#0A0A0B]'
-                    : 'bg-[#0A0A0B] border-[#242428] text-[#F2EFE9] hover:border-[#D49A2A]'
-                }`}
+                onClick={() => setIsBonusModalOpen(false)}
+                aria-label="Cerrar modal de bonos"
+                className="w-9 h-9 rounded-lg bg-[#090D16] border border-[#1E293B] hover:border-[#334155] flex items-center justify-center text-[#94A3B8] hover:text-[#F8FAFC] cursor-pointer"
               >
-                <span
-                  className={`block font-display text-[9px] font-bold uppercase ${
-                    isSelected ? 'text-[#0A0A0B]' : 'text-[#8A8A93]'
-                  }`}
-                >
-                  {dayName} {monthShort}
-                </span>
-                <span className="block font-mono-code text-base font-bold">
-                  {dayNumber}
-                </span>
-                <span
-                  className={`block font-mono-code text-[9px] ${
-                    isSelected ? 'text-[#0A0A0B]/80' : 'text-[#8A8A93]'
-                  }`}
-                >
-                  {countOnDay} slots
-                </span>
+                <X className="w-4 h-4" />
               </button>
-            );
-          })}
-        </div>
+            </div>
 
-        <div className="grid grid-cols-3 sm:grid-cols-4 gap-2.5">
-          {STANDARD_30M_BLOCKS.map((hhmm) => {
-            const existing = slotsForDateMap.get(hhmm);
-            const status = existing?.status;
+            <p className="text-xs text-[#94A3B8] leading-relaxed">
+              Cuantos más turnos con seña completes en la semana, mayor es el
+              bono extra que recibís:
+            </p>
 
-            return (
-              <button
-                key={hhmm}
-                type="button"
-                disabled={
-                  submitting || (existing && existing.status !== 'AVAILABLE')
-                }
-                onClick={async () => {
-                  setSubmitting(true);
-                  try {
-                    await onToggleSingleSlot({
-                      date: selectedDate,
-                      slot_start_time: hhmm,
-                    });
-                  } finally {
-                    setSubmitting(false);
-                  }
-                }}
-                className={`min-h-[60px] p-2.5 rounded-sm border flex flex-col items-center justify-center transition-colors ${
-                  status === 'CONFIRMED'
-                    ? 'bg-[#C85A32]/20 border-[#C85A32] text-[#F2EFE9]'
-                    : status === 'PENDING_PAYMENT'
-                      ? 'bg-[#D49A2A]/20 border-[#D49A2A] text-[#D49A2A]'
-                      : status === 'AVAILABLE'
-                        ? 'bg-[#D49A2A] border-[#D49A2A] text-[#0A0A0B]'
-                        : 'bg-[#0A0A0B] border-[#242428] text-[#8A8A93] hover:border-[#D49A2A]'
+            <div className="space-y-2.5">
+              <div
+                className={`p-3.5 rounded-lg border flex items-center justify-between gap-3 ${
+                  liveWeeklyMetrics.confirmed_count >= 15
+                    ? 'bg-[#2563EB]/12 border-[#2563EB]'
+                    : 'bg-[#090D16] border-[#1E293B]'
                 }`}
               >
-                <div className="flex items-center gap-1">
-                  <Clock className="w-3 h-3" />
-                  <span className="font-mono-code text-sm font-bold">
-                    {hhmm}
+                <div>
+                  <span className="text-xs font-semibold text-[#F8FAFC] flex items-center gap-1.5">
+                    Nivel 1 · 15 turnos en la semana
+                    {liveWeeklyMetrics.confirmed_count >= 15 && (
+                      <CheckCircle2 className="w-4 h-4 text-[#10B981]" />
+                    )}
+                  </span>
+                  <span className="block text-xs text-[#94A3B8] mt-0.5">
+                    Aproximadamente 2 a 3 turnos por día
                   </span>
                 </div>
-                <span className="font-mono-code text-[10px] uppercase mt-1 flex items-center gap-1">
-                  {status === 'CONFIRMED' ? (
-                    <>
-                      <CheckCircle2 className="w-3 h-3" />
-                      {existing?.client?.dni || 'SEÑADO'}
-                    </>
-                  ) : status === 'PENDING_PAYMENT' ? (
-                    <>
-                      <Lock className="w-3 h-3" />
-                      BLOQUEADO
-                    </>
-                  ) : status === 'AVAILABLE' ? (
-                    <>
-                      <Trash2 className="w-3 h-3" />
-                      ACTIVO
-                    </>
-                  ) : (
-                    'CERRADO'
-                  )}
+                <span className="text-sm font-semibold text-[#10B981] shrink-0">
+                  +$10.000 ARS
+                </span>
+              </div>
+
+              <div
+                className={`p-3.5 rounded-lg border flex items-center justify-between gap-3 ${
+                  liveWeeklyMetrics.confirmed_count >= 35
+                    ? 'bg-[#2563EB]/12 border-[#2563EB]'
+                    : 'bg-[#090D16] border-[#1E293B]'
+                }`}
+              >
+                <div>
+                  <span className="text-xs font-semibold text-[#F8FAFC] flex items-center gap-1.5">
+                    Nivel 2 · 35 turnos en la semana
+                    {liveWeeklyMetrics.confirmed_count >= 35 && (
+                      <CheckCircle2 className="w-4 h-4 text-[#10B981]" />
+                    )}
+                  </span>
+                  <span className="block text-xs text-[#94A3B8] mt-0.5">
+                    Aproximadamente 6 turnos por día
+                  </span>
+                </div>
+                <span className="text-sm font-semibold text-[#10B981] shrink-0">
+                  +$25.000 ARS
+                </span>
+              </div>
+
+              <div
+                className={`p-3.5 rounded-lg border flex items-center justify-between gap-3 ${
+                  liveWeeklyMetrics.confirmed_count >= 50
+                    ? 'bg-[#2563EB]/12 border-[#2563EB]'
+                    : 'bg-[#090D16] border-[#1E293B]'
+                }`}
+              >
+                <div>
+                  <span className="text-xs font-semibold text-[#F8FAFC] flex items-center gap-1.5">
+                    Nivel 3 · 50 turnos en la semana
+                    {liveWeeklyMetrics.confirmed_count >= 50 && (
+                      <CheckCircle2 className="w-4 h-4 text-[#10B981]" />
+                    )}
+                  </span>
+                  <span className="block text-xs text-[#94A3B8] mt-0.5">
+                    Incluye módulo Recordatorio IA bonificado
+                  </span>
+                </div>
+                <span className="text-sm font-semibold text-[#10B981] shrink-0">
+                  +$40.000 ARS
+                </span>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setIsBonusModalOpen(false)}
+              className="w-full min-h-[48px] rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] text-[#F8FAFC] text-xs font-semibold transition-colors cursor-pointer"
+            >
+              Entendido
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE CONFIGURACIÓN DE HORARIOS */}
+      {isScheduleConfigOpen && (
+        <div className="fixed inset-0 z-50 h-[100dvh] flex items-end sm:items-center justify-center bg-[#090D16]/85 backdrop-blur-xs p-0 sm:p-4 pointer-events-auto">
+          <div
+            className="fixed inset-0 z-40"
+            onClick={() => setIsScheduleConfigOpen(false)}
+          />
+
+          <div className="relative z-50 w-full max-w-2xl bg-[#0F172A] border-t sm:border border-[#1E293B] rounded-t-xl sm:rounded-xl p-5 sm:p-6 space-y-4 max-h-[92dvh] overflow-y-auto pointer-events-auto shadow-2xl">
+            <div className="flex items-start justify-between gap-3 border-b border-[#1E293B] pb-3.5">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-lg bg-[#2563EB]/12 border border-[#2563EB]/30 flex items-center justify-center text-[#2563EB] shrink-0">
+                  <CalendarCheck2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <span className="text-xs font-medium text-[#94A3B8]">
+                    Turnos de 30 minutos
+                  </span>
+                  <h2 className="text-base sm:text-lg font-semibold text-[#F8FAFC]">
+                    Configurar mis horarios
+                  </h2>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsScheduleConfigOpen(false)}
+                aria-label="Cerrar configuración de horarios"
+                className="w-9 h-9 rounded-lg bg-[#090D16] border border-[#1E293B] hover:border-[#334155] flex items-center justify-center text-[#94A3B8] hover:text-[#F8FAFC] cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleRangeSubmit} className="space-y-4">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-[#F8FAFC]">
+                  1. Abrir jornada completa
+                </span>
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={useDateRange}
+                    onChange={(e) => {
+                      setUseDateRange(e.target.checked);
+                      if (e.target.checked && endDate < configDate) {
+                        setEndDate(configDate);
+                      }
+                    }}
+                    className="accent-[#2563EB] w-4 h-4"
+                  />
+                  <span className="text-xs text-[#94A3B8]">Varios días</span>
+                </label>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-[#94A3B8] mb-1">
+                    {useDateRange ? 'Desde' : 'Día'}
+                  </label>
+                  <input
+                    type="date"
+                    value={configDate}
+                    onChange={(e) => {
+                      setConfigDate(e.target.value);
+                      if (endDate < e.target.value) setEndDate(e.target.value);
+                    }}
+                    className="w-full min-h-[44px] px-3 rounded-lg bg-[#090D16] border border-[#1E293B] text-xs text-[#F8FAFC]"
+                  />
+                </div>
+
+                {useDateRange && (
+                  <div>
+                    <label className="block text-xs font-medium text-[#94A3B8] mb-1">
+                      Hasta
+                    </label>
+                    <input
+                      type="date"
+                      min={configDate}
+                      value={endDate}
+                      onChange={(e) => setEndDate(e.target.value)}
+                      className="w-full min-h-[44px] px-3 rounded-lg bg-[#090D16] border border-[#1E293B] text-xs text-[#F8FAFC]"
+                    />
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-xs font-medium text-[#94A3B8] mb-1">
+                    Desde hora
+                  </label>
+                  <select
+                    value={rangeStart}
+                    onChange={(e) => setRangeStart(e.target.value)}
+                    className="w-full min-h-[44px] px-3 rounded-lg bg-[#090D16] border border-[#1E293B] text-xs text-[#F8FAFC]"
+                  >
+                    {STANDARD_30M_BLOCKS.map((t) => (
+                      <option key={t} value={t}>
+                        {t} hs
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-[#94A3B8] mb-1">
+                    Hasta hora
+                  </label>
+                  <select
+                    value={rangeEnd}
+                    onChange={(e) => setRangeEnd(e.target.value)}
+                    className="w-full min-h-[44px] px-3 rounded-lg bg-[#090D16] border border-[#1E293B] text-xs text-[#F8FAFC]"
+                  >
+                    {STANDARD_30M_BLOCKS.map((t) => (
+                      <option key={t} value={t}>
+                        {t} hs
+                      </option>
+                    ))}
+                    <option value="22:00">22:00 hs</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="p-3.5 rounded-lg bg-[#090D16] border border-[#1E293B] space-y-3">
+                <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={includeBreak}
+                    onChange={(e) => setIncludeBreak(e.target.checked)}
+                    className="accent-[#2563EB] w-4 h-4"
+                  />
+                  <Coffee className="w-4 h-4 text-[#2563EB]" />
+                  <span className="text-xs font-medium text-[#F8FAFC]">
+                    Pausa de descanso / almuerzo
+                  </span>
+                </label>
+
+                {includeBreak && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-medium text-[#94A3B8] mb-1">
+                        Inicio pausa
+                      </label>
+                      <select
+                        value={breakStart}
+                        onChange={(e) => setBreakStart(e.target.value)}
+                        className="w-full min-h-[44px] px-3 rounded-lg bg-[#0F172A] border border-[#1E293B] text-xs text-[#F8FAFC]"
+                      >
+                        {STANDARD_30M_BLOCKS.map((t) => (
+                          <option key={t} value={t}>
+                            {t} hs
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-medium text-[#94A3B8] mb-1">
+                        Retoma a las
+                      </label>
+                      <select
+                        value={breakEnd}
+                        onChange={(e) => setBreakEnd(e.target.value)}
+                        className="w-full min-h-[44px] px-3 rounded-lg bg-[#0F172A] border border-[#1E293B] text-xs text-[#F8FAFC]"
+                      >
+                        {STANDARD_30M_BLOCKS.map((t) => (
+                          <option key={t} value={t}>
+                            {t} hs
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <button
+                type="submit"
+                disabled={submitting || generationPreview.total === 0}
+                className="w-full min-h-[48px] px-4 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-50 text-[#F8FAFC] text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer"
+              >
+                <CalendarPlus className="w-4 h-4" />
+                <span>
+                  {submitting
+                    ? 'Guardando horarios...'
+                    : `Habilitar ${generationPreview.total} turnos de 30 min`}
                 </span>
               </button>
-            );
-          })}
+            </form>
+
+            {errorMsg && (
+              <div className="p-3 rounded-lg bg-[#090D16] border border-[#334155] text-xs text-[#F8FAFC]">
+                {errorMsg}
+              </div>
+            )}
+
+            {feedback && (
+              <div className="p-3 rounded-lg bg-[#2563EB]/12 border border-[#2563EB]/40 text-xs text-[#F8FAFC]">
+                {feedback}
+              </div>
+            )}
+
+            <div className="pt-3 border-t border-[#1E293B] space-y-3">
+              <span className="block text-xs font-semibold text-[#F8FAFC]">
+                2. Prender o apagar horarios puntuales ({configDate})
+              </span>
+
+              <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                {STANDARD_30M_BLOCKS.map((hhmm) => {
+                  const existing = slotsForConfigDateMap.get(hhmm);
+                  const status = existing?.status;
+
+                  return (
+                    <button
+                      key={hhmm}
+                      type="button"
+                      disabled={
+                        submitting ||
+                        (existing && existing.status !== 'AVAILABLE')
+                      }
+                      onClick={async () => {
+                        setSubmitting(true);
+                        try {
+                          await onToggleSingleSlot({
+                            date: configDate,
+                            slot_start_time: hhmm,
+                          });
+                        } finally {
+                          setSubmitting(false);
+                        }
+                      }}
+                      className={`min-h-[48px] p-2 rounded-lg border flex flex-col items-center justify-center transition-colors cursor-pointer ${
+                        status === 'CONFIRMED'
+                          ? 'bg-[#2563EB]/20 border-[#2563EB] text-[#F8FAFC]'
+                          : status === 'PENDING_PAYMENT'
+                            ? 'bg-[#1E293B] border-[#334155] text-[#94A3B8]'
+                            : status === 'AVAILABLE'
+                              ? 'bg-[#2563EB] border-[#2563EB] text-[#F8FAFC]'
+                              : 'bg-[#090D16] border-[#1E293B] text-[#94A3B8]'
+                      }`}
+                    >
+                      <span className="text-sm font-semibold">{hhmm}</span>
+                      <span className="text-[10px]">
+                        {status === 'CONFIRMED'
+                          ? 'Confirmado'
+                          : status === 'PENDING_PAYMENT'
+                            ? 'Pendiente'
+                            : status === 'AVAILABLE'
+                              ? 'Abierto'
+                              : 'Cerrado'}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
         </div>
-      </section>
+      )}
     </div>
   );
 };

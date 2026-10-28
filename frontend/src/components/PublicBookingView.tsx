@@ -1,20 +1,17 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Clock,
-  MapPin,
   CheckCircle2,
   Lock,
-  ExternalLink,
   Sparkles,
-  RefreshCw,
   CreditCard,
-  Bot,
   TicketCheck,
   CalendarPlus,
   Download,
   MessageCircle,
-  Mail,
   ShieldAlert,
+  X,
+  CalendarX2,
 } from 'lucide-react';
 import { api } from '../services/api';
 import {
@@ -26,9 +23,15 @@ import {
 import {
   buildGoogleCalendarUrl,
   buildWhatsAppShareUrl,
-  NON_REFUNDABLE_LEGEND,
 } from '../utils/postBookingAndGamification';
 import { SandboxCheckoutModal } from './SandboxCheckoutModal';
+
+export interface InlineBookingClientData {
+  dni: string;
+  name: string;
+  phone: string;
+  password?: string;
+}
 
 interface PublicBookingViewProps {
   schedule: PublicBarberScheduleResponse;
@@ -39,7 +42,10 @@ interface PublicBookingViewProps {
   selectedSlot: AppointmentSlot | null;
   onSelectSlot: (slot: AppointmentSlot | null) => void;
   activeLock: LockSlotResponse | null;
-  onInitiateLock: (slot: AppointmentSlot) => Promise<void>;
+  onInitiateLock: (
+    slot: AppointmentSlot,
+    clientData?: InlineBookingClientData,
+  ) => Promise<void>;
   onSimulateWebhook: (slotId: string) => Promise<void>;
   onSimulateRejectedWebhook: (
     slotId: string,
@@ -99,9 +105,6 @@ export function formatDateHeader(dateStr: string): {
 
 export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
   schedule,
-  slug,
-  onChangeSlug,
-  onRefresh,
   user,
   selectedSlot,
   onSelectSlot,
@@ -121,8 +124,22 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
     [schedule.dates],
   );
   const [selectedDate, setSelectedDate] = useState<string>(dateKeys[0] || '');
-  const [slugInput, setSlugInput] = useState(slug);
   const [remainingSeconds, setRemainingSeconds] = useState<number>(0);
+
+  // Modal / Bottom Sheet minimalista de confirmación (DNI, Nombre, WhatsApp)
+  const [isConfirmSheetOpen, setIsConfirmSheetOpen] = useState(false);
+  const [confirmDni, setConfirmDni] = useState(user?.dni || '');
+  const [confirmName, setConfirmName] = useState(user?.name || '');
+  const [confirmPhone, setConfirmPhone] = useState(user?.phone || '');
+  const [confirmError, setConfirmError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (user) {
+      setConfirmDni(user.dni || '');
+      setConfirmName(user.name || '');
+      setConfirmPhone(user.phone || '');
+    }
+  }, [user]);
 
   useEffect(() => {
     if (dateKeys.length > 0 && !dateKeys.includes(selectedDate)) {
@@ -152,228 +169,303 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
     return schedule.dates[selectedDate] || [];
   }, [schedule.dates, selectedDate]);
 
+  const { morningSlots, afternoonSlots } = useMemo(() => {
+    const morning: AppointmentSlot[] = [];
+    const afternoon: AppointmentSlot[] = [];
+    for (const slot of slotsForSelectedDate) {
+      const hourUtc = new Date(slot.start_time).getUTCHours();
+      if (hourUtc < 13) {
+        morning.push(slot);
+      } else {
+        afternoon.push(slot);
+      }
+    }
+    return { morningSlots: morning, afternoonSlots: afternoon };
+  }, [slotsForSelectedDate]);
+
   const countdownFormatted = useMemo(() => {
     const mins = String(Math.floor(remainingSeconds / 60)).padStart(2, '0');
     const secs = String(remainingSeconds % 60).padStart(2, '0');
     return `${mins}:${secs}`;
   }, [remainingSeconds]);
 
-  const isSandboxMode = activeLock?.payment.is_sandbox_local !== false;
+  const handleRedirectToMercadoPago = () => {
+    if (!activeLock) return;
+    const targetUrl =
+      activeLock.payment.init_point || activeLock.payment.sandbox_init_point;
+    if (
+      targetUrl &&
+      !activeLock.payment.is_sandbox_local &&
+      targetUrl.startsWith('http')
+    ) {
+      window.location.href = targetUrl;
+      return;
+    }
+    onSetSandboxCheckoutOpen(true);
+  };
+
+  const handleConfirmSheetSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedSlot) return;
+
+    const cleanDni = confirmDni.replace(/\D/g, '');
+    if (cleanDni.length < 7 || cleanDni.length > 9) {
+      setConfirmError('Ingresá un DNI válido de 7 a 9 números.');
+      return;
+    }
+    if (!confirmName.trim()) {
+      setConfirmError('Ingresá tu nombre y apellido.');
+      return;
+    }
+    if (!confirmPhone.trim() || confirmPhone.replace(/\D/g, '').length < 8) {
+      setConfirmError('Ingresá un número de WhatsApp válido.');
+      return;
+    }
+
+    setConfirmError(null);
+    setIsConfirmSheetOpen(false);
+    await onInitiateLock(selectedSlot, {
+      dni: cleanDni,
+      name: confirmName.trim(),
+      phone: confirmPhone.trim(),
+      password: cleanDni.padStart(6, '0'),
+    });
+  };
 
   return (
-    <div className="pb-32 space-y-6">
-      {/* Barber Editorial Hero Card */}
-      <section className="p-5 rounded-sm bg-[#121214] border border-[#242428]">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#242428] pb-4">
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="font-mono-code text-[11px] uppercase tracking-widest px-2 py-0.5 rounded-sm bg-[#0A0A0B] border border-[#D49A2A]/60 text-[#D49A2A]">
-                AGENDA PÚBLICA
-              </span>
-              <span className="font-mono-code text-xs text-[#8A8A93]">
-                /{schedule.barber.slug}
-              </span>
-            </div>
-            <h1 className="font-display text-2xl sm:text-3xl font-extrabold uppercase tracking-tight text-[#F2EFE9] mt-2">
-              {schedule.barber.shop_name}
-            </h1>
-            <p className="text-xs text-[#8A8A93] mt-1 flex items-center gap-1.5">
-              <MapPin className="w-3.5 h-3.5 text-[#D49A2A]" />
-              <span>
-                {schedule.barber.address || 'Atención con reserva previa'} ·
-                Barbero:{' '}
-                <strong className="text-[#F2EFE9]">
-                  {schedule.barber.barber_name}
-                </strong>
-              </span>
+    <div className="pb-24 space-y-4 max-w-full overflow-x-hidden">
+      {/* 1. BARRA DE SELECCIÓN DE DÍA (En Primera Pantalla Móvil sin scroll) */}
+      <section className="space-y-2">
+        <div className="flex items-center justify-between px-0.5">
+          <h2 className="text-xs font-semibold uppercase tracking-normal text-[#94A3B8]">
+            Seleccioná el día
+          </h2>
+          <span className="text-xs font-medium text-[#94A3B8]">
+            Turnos de 30 min
+          </span>
+        </div>
+
+        {dateKeys.length === 0 ? (
+          <div className="p-6 rounded-lg bg-[#0F172A] border border-[#1E293B] text-center space-y-2">
+            <CalendarX2 className="w-6 h-6 text-[#2563EB] mx-auto" />
+            <p className="text-sm font-semibold text-[#F8FAFC]">
+              Sin turnos disponibles por el momento
+            </p>
+            <p className="text-xs text-[#94A3B8]">
+              El barbero actualizará su agenda en breve.
             </p>
           </div>
+        ) : (
+          <div className="flex items-center gap-2 overflow-x-auto no-scrollbar snap-x snap-mandatory pb-0.5">
+            {dateKeys.map((dateStr) => {
+              const { dayName, dayNumber, monthShort } =
+                formatDateHeader(dateStr);
+              const isSelected = dateStr === selectedDate;
+              const count = schedule.dates[dateStr]?.length || 0;
 
-          <div className="flex items-center gap-2 self-start sm:self-center">
-            <div className="px-3 py-2 rounded-sm bg-[#0A0A0B] border border-[#242428] text-right">
-              <span className="block text-[10px] font-display uppercase tracking-wider text-[#8A8A93]">
-                SEÑA FIJA
-              </span>
-              <span className="font-mono-code text-base font-bold text-[#D49A2A]">
-                $2.000 ARS
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={onRefresh}
-              title="Actualizar disponibilidad"
-              className="min-w-[44px] min-h-[44px] rounded-sm bg-[#0A0A0B] border border-[#242428] hover:border-[#D49A2A] flex items-center justify-center text-[#8A8A93] hover:text-[#F2EFE9] transition-colors"
-            >
-              <RefreshCw className="w-4 h-4" />
-            </button>
+              return (
+                <button
+                  key={dateStr}
+                  type="button"
+                  onClick={() => {
+                    setSelectedDate(dateStr);
+                    onSelectSlot(null);
+                  }}
+                  className={`snap-start min-h-[54px] min-w-[82px] px-3 py-2 rounded-lg border text-center transition-colors shrink-0 flex flex-col items-center justify-center cursor-pointer ${
+                    isSelected
+                      ? 'bg-[#2563EB] border-[#2563EB] text-[#F8FAFC]'
+                      : 'bg-[#0F172A] border-[#1E293B] text-[#F8FAFC] hover:border-[#334155]'
+                  }`}
+                >
+                  <span className="text-xs font-semibold">
+                    {dayName} {dayNumber}
+                  </span>
+                  <span
+                    className={`text-[11px] font-medium mt-0.5 ${
+                      isSelected ? 'text-[#F8FAFC]/90' : 'text-[#94A3B8]'
+                    }`}
+                  >
+                    {monthShort} · {count} disp.
+                  </span>
+                </button>
+              );
+            })}
           </div>
-        </div>
-
-        {/* Barber Slug Selector */}
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (slugInput.trim()) onChangeSlug(slugInput.trim());
-          }}
-          className="mt-4 flex items-center gap-2"
-        >
-          <span className="font-mono-code text-xs text-[#8A8A93] shrink-0">
-            barberia/
-          </span>
-          <input
-            type="text"
-            value={slugInput}
-            onChange={(e) => setSlugInput(e.target.value)}
-            placeholder="slug-barbero"
-            className="flex-1 min-h-[38px] px-3 rounded-sm bg-[#0A0A0B] border border-[#242428] focus:border-[#D49A2A] focus:outline-none font-mono-code text-xs text-[#F2EFE9]"
-          />
-          <button
-            type="submit"
-            className="min-h-[38px] px-3 rounded-sm bg-[#0A0A0B] border border-[#242428] hover:border-[#D49A2A] font-display text-[11px] uppercase font-bold tracking-wider text-[#F2EFE9] transition-colors"
-          >
-            CARGAR
-          </button>
-        </form>
-
-        {/* Blindaje de Seña NO REEMBOLSABLE en Tarjeta de Reserva */}
-        <div className="mt-4 p-3 rounded-sm bg-[#0A0A0B] border border-[#C85A32]/60 flex items-start gap-2">
-          <ShieldAlert className="w-4 h-4 text-[#C85A32] shrink-0 mt-0.5" />
-          <p className="font-mono-code text-[11px] text-[#F2EFE9] leading-relaxed">
-            {NON_REFUNDABLE_LEGEND}
-          </p>
-        </div>
+        )}
       </section>
 
-      {/* Active 10-Minute Lock Banner (PENDING_PAYMENT) */}
+      {/* 2. GRILLA DE HORARIOS DE 30 MINUTOS (Directo en primera pantalla) */}
+      {selectedDate && (
+        <section className="space-y-3">
+          {slotsForSelectedDate.length === 0 ? (
+            <div className="p-6 rounded-lg bg-[#0F172A] border border-[#1E293B] text-center space-y-2">
+              <CalendarX2 className="w-6 h-6 text-[#94A3B8] mx-auto" />
+              <p className="text-sm font-semibold text-[#F8FAFC]">
+                No quedan horarios libres en este día
+              </p>
+              <p className="text-xs text-[#94A3B8]">
+                Elegí otro día en la barra superior.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {/* Bloque Mañana */}
+              {morningSlots.length > 0 && (
+                <div className="p-3.5 rounded-lg bg-[#0F172A] border border-[#1E293B] space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-[#94A3B8]">
+                      Mañana
+                    </span>
+                    <span className="text-[11px] font-medium text-[#94A3B8]">
+                      {morningSlots.length} disponibles
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                    {morningSlots.map((slot) => {
+                      const startLabel = formatTime30m(slot.start_time);
+                      const isSelected = selectedSlot?.id === slot.id;
+
+                      return (
+                        <button
+                          key={slot.id}
+                          type="button"
+                          onClick={() => onSelectSlot(isSelected ? null : slot)}
+                          className={`min-h-[48px] px-3 py-2.5 rounded-lg border text-sm font-semibold transition-colors flex items-center justify-center cursor-pointer ${
+                            isSelected
+                              ? 'bg-[#2563EB] border-[#2563EB] text-[#F8FAFC]'
+                              : 'bg-[#090D16] border-[#1E293B] text-[#F8FAFC] hover:border-[#334155]'
+                          }`}
+                        >
+                          {startLabel}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Bloque Tarde */}
+              {afternoonSlots.length > 0 && (
+                <div className="p-3.5 rounded-lg bg-[#0F172A] border border-[#1E293B] space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-[#94A3B8]">
+                      Tarde
+                    </span>
+                    <span className="text-[11px] font-medium text-[#94A3B8]">
+                      {afternoonSlots.length} disponibles
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                    {afternoonSlots.map((slot) => {
+                      const startLabel = formatTime30m(slot.start_time);
+                      const isSelected = selectedSlot?.id === slot.id;
+
+                      return (
+                        <button
+                          key={slot.id}
+                          type="button"
+                          onClick={() => onSelectSlot(isSelected ? null : slot)}
+                          className={`min-h-[48px] px-3 py-2.5 rounded-lg border text-sm font-semibold transition-colors flex items-center justify-center cursor-pointer ${
+                            isSelected
+                              ? 'bg-[#2563EB] border-[#2563EB] text-[#F8FAFC]'
+                              : 'bg-[#090D16] border-[#1E293B] text-[#F8FAFC] hover:border-[#334155]'
+                          }`}
+                        >
+                          {startLabel}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* Banner compacto si hay reserva temporal pendiente de pago */}
       {activeLock && remainingSeconds > 0 && (
-        <section className="p-5 rounded-sm bg-[#121214] border border-[#D49A2A] space-y-4">
-          <div className="flex items-start justify-between gap-3">
+        <section className="p-4 rounded-lg bg-[#0F172A] border border-[#2563EB] space-y-3">
+          <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2.5">
-              <div className="w-9 h-9 rounded-sm bg-[#0A0A0B] border border-[#D49A2A] flex items-center justify-center">
-                <Lock className="w-4 h-4 text-[#D49A2A]" />
+              <div className="w-9 h-9 rounded-md bg-[#2563EB]/12 border border-[#2563EB]/40 flex items-center justify-center shrink-0">
+                <Lock className="w-4 h-4 text-[#2563EB]" />
               </div>
               <div>
-                <span className="font-mono-code text-[11px] uppercase tracking-widest text-[#D49A2A]">
-                  BLOQUEADO POR 10 MINUTOS (PENDING_PAYMENT)
+                <span className="text-xs font-medium text-[#94A3B8]">
+                  Pendiente de pago · Expira en {countdownFormatted}
                 </span>
-                <h3 className="font-display text-base font-extrabold uppercase text-[#F2EFE9]">
-                  TURNO {formatTime30m(activeLock.slot.start_time)} –{' '}
-                  {formatTime30m(activeLock.slot.end_time)} HS
+                <h3 className="text-sm font-semibold text-[#F8FAFC]">
+                  Turno {formatTime30m(activeLock.slot.start_time)} a{' '}
+                  {formatTime30m(activeLock.slot.end_time)} hs
                 </h3>
               </div>
             </div>
-            <div className="px-3 py-1.5 rounded-sm bg-[#0A0A0B] border border-[#C85A32] text-right">
-              <span className="block text-[9px] uppercase tracking-wider text-[#8A8A93]">
-                EXPIRA EN
-              </span>
-              <span className="font-mono-code text-sm font-bold text-[#C85A32]">
-                {countdownFormatted}
-              </span>
-            </div>
           </div>
 
-          <p className="text-xs text-[#8A8A93] leading-relaxed">
-            Tu bloque de 30 minutos está reservado temporalmente. Aboná la seña
-            fija de{' '}
-            <span className="font-mono-code text-[#F2EFE9] font-semibold">
-              $2.000 ARS
-            </span>{' '}
-            antes de que el cron libere el turno.
-          </p>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-            {isSandboxMode ? (
-              <button
-                type="button"
-                onClick={() => onSetSandboxCheckoutOpen(true)}
-                className="min-h-[46px] px-4 rounded-sm bg-[#D49A2A] hover:bg-[#C85A32] text-[#0A0A0B] font-display text-xs uppercase font-extrabold tracking-wider flex items-center justify-center gap-2 transition-colors"
-              >
-                <CreditCard className="w-4 h-4" />
-                <span>ABRIR CHECKOUT MERCADO PAGO · $2.000</span>
-              </button>
-            ) : (
-              <a
-                href={activeLock.payment.init_point}
-                target="_blank"
-                rel="noreferrer"
-                className="min-h-[46px] px-4 rounded-sm bg-[#D49A2A] hover:bg-[#C85A32] text-[#0A0A0B] font-display text-xs uppercase font-extrabold tracking-wider flex items-center justify-center gap-2 transition-colors"
-              >
-                <span>PAGAR SEÑA EN MERCADO PAGO · $2.000</span>
-                <ExternalLink className="w-3.5 h-3.5" />
-              </a>
-            )}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={handleRedirectToMercadoPago}
+              className="min-h-[48px] px-4 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] text-[#F8FAFC] text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer"
+            >
+              <CreditCard className="w-4 h-4" />
+              <span>Pagar seña en Mercado Pago · $2.000</span>
+            </button>
 
             <button
               type="button"
               onClick={() => onSimulateWebhook(activeLock.slot.id)}
-              className="min-h-[46px] px-4 rounded-sm bg-[#0A0A0B] border border-[#D49A2A] text-[#D49A2A] hover:bg-[#D49A2A]/10 font-mono-code text-xs font-semibold flex items-center justify-center gap-2 transition-colors"
+              className="min-h-[48px] px-4 rounded-lg bg-[#090D16] border border-[#334155] hover:border-[#2563EB] text-[#F8FAFC] text-xs font-medium flex items-center justify-center gap-2 transition-colors cursor-pointer"
             >
-              <Sparkles className="w-3.5 h-3.5" />
-              <span>SIMULAR PAGO APROBADO ($2.000 ARS)</span>
+              <Sparkles className="w-4 h-4 text-[#2563EB]" />
+              <span>Confirmar pago (Demo)</span>
             </button>
           </div>
         </section>
       )}
 
-      {/* Confirmed Payment Banner (Pantalla de Éxito Post-Confirmación) */}
+      {/* Banner de Éxito cuando el turno fue confirmado */}
       {confirmedSlotInfo && (
-        <section className="p-5 rounded-sm bg-[#121214] border border-[#D49A2A] space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#242428] pb-3.5">
-            <div className="flex items-center gap-2 text-[#D49A2A]">
-              <CheckCircle2 className="w-5 h-5 shrink-0" />
-              <h3 className="font-display text-base font-extrabold uppercase tracking-wide text-[#F2EFE9]">
-                ¡TURNO CONFIRMADO! SEÑA DE $2.000 ACREDITADA
-              </h3>
+        <section className="p-4 rounded-lg bg-[#0F172A] border border-[#2563EB] space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-md bg-[#2563EB]/12 border border-[#2563EB]/40 flex items-center justify-center text-[#2563EB] shrink-0">
+                <CheckCircle2 className="w-5 h-5" />
+              </div>
+              <div>
+                <span className="text-xs font-medium text-[#2563EB]">
+                  Seña confirmada · $2.000 ARS
+                </span>
+                <h3 className="text-sm font-semibold text-[#F8FAFC]">
+                  ¡Tu turno ya está reservado!
+                </h3>
+              </div>
             </div>
 
             {onGoToClientAppointments && (
               <button
                 type="button"
                 onClick={onGoToClientAppointments}
-                className="min-h-[38px] px-3 rounded-sm bg-[#0A0A0B] border border-[#D49A2A] text-[#D49A2A] hover:bg-[#D49A2A] hover:text-[#0A0A0B] font-display text-[11px] uppercase font-bold tracking-wider flex items-center gap-1.5 self-start sm:self-center transition-colors"
+                className="min-h-[40px] px-3 rounded-lg bg-[#090D16] border border-[#334155] text-[#F8FAFC] text-xs font-medium flex items-center gap-1.5"
               >
-                <TicketCheck className="w-3.5 h-3.5" />
-                <span>VER COMPROBANTE EN MIS TURNOS</span>
+                <TicketCheck className="w-3.5 h-3.5 text-[#2563EB]" />
+                <span>Mis turnos</span>
               </button>
             )}
           </div>
 
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-mono-code text-xs text-[#8A8A93]">
-            <span>
-              mp_payment_id:{' '}
-              <strong className="text-[#F2EFE9]">
-                {confirmedSlotInfo.mpPaymentId}
-              </strong>
-            </span>
-            <span>
-              · slot_id:{' '}
-              <strong className="text-[#F2EFE9]">
-                {confirmedSlotInfo.slotId.slice(0, 8)}
-              </strong>
-            </span>
-            <span>
-              · estado: <strong className="text-[#D49A2A]">CONFIRMED</strong>
-            </span>
-            {confirmedSlotInfo.startTimeIso && confirmedSlotInfo.endTimeIso && (
-              <span>
-                · horario:{' '}
-                <strong className="text-[#F2EFE9]">
-                  {confirmedSlotInfo.startTimeIso.slice(0, 10)}{' '}
-                  {formatTime30m(confirmedSlotInfo.startTimeIso)}–
-                  {formatTime30m(confirmedSlotInfo.endTimeIso)} hs (30m)
-                </strong>
-              </span>
-            )}
-          </div>
-
-          {/* Botones Post-Confirmación: Google Calendar, .ICS y WhatsApp */}
           {(() => {
             const startIso =
               confirmedSlotInfo.startTimeIso ||
               new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
             const endIso =
               confirmedSlotInfo.endTimeIso ||
-              new Date(new Date(startIso).getTime() + 30 * 60 * 1000).toISOString();
+              new Date(
+                new Date(startIso).getTime() + 30 * 60 * 1000,
+              ).toISOString();
             const gcalUrl = buildGoogleCalendarUrl({
               shopName: schedule.barber.shop_name,
               address: schedule.barber.address,
@@ -391,15 +483,15 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
             });
 
             return (
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 <a
                   href={gcalUrl}
                   target="_blank"
                   rel="noreferrer"
-                  className="min-h-[44px] px-3 rounded-sm bg-[#D49A2A] hover:bg-[#C85A32] text-[#0A0A0B] font-display text-[11px] uppercase font-extrabold tracking-wider flex items-center justify-center gap-1.5 transition-colors"
+                  className="min-h-[44px] px-3 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] text-[#F8FAFC] text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
                 >
                   <CalendarPlus className="w-4 h-4 shrink-0" />
-                  <span>AGREGAR A GOOGLE CALENDAR</span>
+                  <span>Google Calendar</span>
                 </a>
 
                 <button
@@ -415,228 +507,178 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
                       mpPaymentId: confirmedSlotInfo.mpPaymentId,
                     })
                   }
-                  className="min-h-[44px] px-3 rounded-sm bg-[#0A0A0B] border border-[#D49A2A] text-[#D49A2A] hover:bg-[#D49A2A] hover:text-[#0A0A0B] font-display text-[11px] uppercase font-bold tracking-wider flex items-center justify-center gap-1.5 transition-colors"
+                  className="min-h-[44px] px-3 rounded-lg bg-[#090D16] border border-[#334155] text-[#F8FAFC] text-xs font-medium flex items-center justify-center gap-1.5 transition-colors"
                 >
-                  <Download className="w-4 h-4 shrink-0" />
-                  <span>DESCARGAR CALENDARIO (.ICS)</span>
+                  <Download className="w-4 h-4 text-[#2563EB] shrink-0" />
+                  <span>Descargar .ICS</span>
                 </button>
 
                 <a
                   href={waUrl}
                   target="_blank"
                   rel="noreferrer"
-                  className="min-h-[44px] px-3 rounded-sm bg-[#0A0A0B] border border-[#242428] hover:border-[#D49A2A] text-[#F2EFE9] font-display text-[11px] uppercase font-bold tracking-wider flex items-center justify-center gap-1.5 transition-colors"
+                  className="min-h-[44px] px-3 rounded-lg bg-[#090D16] border border-[#334155] text-[#F8FAFC] text-xs font-medium flex items-center justify-center gap-1.5 transition-colors"
                 >
-                  <MessageCircle className="w-4 h-4 text-[#D49A2A] shrink-0" />
-                  <span>COMPARTIR POR WHATSAPP</span>
+                  <MessageCircle className="w-4 h-4 text-[#2563EB] shrink-0" />
+                  <span>Avisar por WhatsApp</span>
                 </a>
               </div>
             );
           })()}
+        </section>
+      )}
 
-          {/* Notificación de Email + .ICS Adjunto */}
-          <div className="p-3 rounded-sm bg-[#0A0A0B] border border-[#242428] flex items-center gap-2 font-mono-code text-[11px] text-[#8A8A93]">
-            <Mail className="w-3.5 h-3.5 text-[#D49A2A] shrink-0" />
-            <span>
-              ✓ Comprobante con archivo <strong className="text-[#F2EFE9]">.ics adjunto</strong> enviado al cliente y aviso enviado al barbero vía <strong className="text-[#D49A2A]">MailService ({confirmedSlotInfo.emailMode || 'Nodemailer SMTP / Dev Fallback'})</strong>.
-            </span>
-          </div>
-
-          {confirmedSlotInfo.reminderEnqueued && (
-            <div className="p-3 rounded-sm bg-[#0A0A0B] border border-[#D49A2A]/50 space-y-1">
-              <div className="flex items-center gap-1.5 font-mono-code text-[11px] text-[#D49A2A]">
-                <Bot className="w-3.5 h-3.5" />
-                <span>
-                  ✓ Recordatorio IA generado en ReminderQueue (MockDeepSeekReminderService):
+      {/* 3. BARRA INFERIOR FIJA (Sticky Bottom Bar) de 60px */}
+      <div className="fixed bottom-0 left-0 right-0 z-30 h-[60px] bg-[#0F172A]/95 backdrop-blur-md border-t border-[#1E293B] px-3.5 sm:px-6 flex items-center">
+        <div className="max-w-3xl w-full mx-auto flex items-center justify-between gap-3">
+          {!selectedSlot ? (
+            <div className="w-full text-center text-sm font-medium text-[#94A3B8]">
+              Seleccioná un horario para reservar
+            </div>
+          ) : (
+            <div className="w-full flex items-center gap-3">
+              <div className="hidden sm:flex items-center gap-1.5 text-xs font-medium text-[#94A3B8] shrink-0">
+                <Clock className="w-3.5 h-3.5 text-[#2563EB]" />
+                <span className="text-[#F8FAFC] font-semibold">
+                  {formatDateHeader(selectedDate).dayName}{' '}
+                  {formatDateHeader(selectedDate).dayNumber} ·{' '}
+                  {formatTime30m(selectedSlot.start_time)} hs
                 </span>
               </div>
-              {confirmedSlotInfo.reminderMessage && (
-                <p className="font-mono-code text-xs text-[#F2EFE9] leading-relaxed">
-                  {confirmedSlotInfo.reminderMessage}
-                </p>
-              )}
+
+              <button
+                type="button"
+                disabled={isLocking}
+                onClick={() => {
+                  setConfirmError(null);
+                  setIsConfirmSheetOpen(true);
+                }}
+                className="w-full h-[44px] px-4 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-50 text-[#F8FAFC] text-sm font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer pointer-events-auto"
+              >
+                <span>
+                  {isLocking
+                    ? 'Procesando...'
+                    : `${formatTime30m(selectedSlot.start_time)} hs · Reservar turno · Seña $2.000`}
+                </span>
+              </button>
             </div>
           )}
-        </section>
-      )}
-
-      {/* Date Selector Strip */}
-      <section className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="font-display text-xs font-extrabold uppercase tracking-widest text-[#8A8A93]">
-            1. SELECCIONÁ FECHA
-          </h2>
-          <span className="font-mono-code text-xs text-[#8A8A93]">
-            {dateKeys.length} {dateKeys.length === 1 ? 'día' : 'días'} con cupo
-          </span>
-        </div>
-
-        {dateKeys.length === 0 ? (
-          <div className="p-6 rounded-sm bg-[#121214] border border-[#242428] text-center">
-            <p className="font-display text-sm uppercase font-bold text-[#F2EFE9]">
-              SIN BLOQUES DISPONIBLES
-            </p>
-            <p className="text-xs text-[#8A8A93] mt-1">
-              El barbero aún no habilitó bloques de 30 minutos para los próximos
-              días.
-            </p>
-          </div>
-        ) : (
-          <div className="flex items-center gap-2 overflow-x-auto pb-1">
-            {dateKeys.map((dateStr) => {
-              const { dayName, dayNumber, monthShort } =
-                formatDateHeader(dateStr);
-              const isSelected = dateStr === selectedDate;
-              const count = schedule.dates[dateStr]?.length || 0;
-
-              return (
-                <button
-                  key={dateStr}
-                  type="button"
-                  onClick={() => {
-                    setSelectedDate(dateStr);
-                    onSelectSlot(null);
-                  }}
-                  className={`min-w-[82px] p-3 rounded-sm border text-center transition-colors shrink-0 ${
-                    isSelected
-                      ? 'bg-[#D49A2A] border-[#D49A2A] text-[#0A0A0B]'
-                      : 'bg-[#121214] border-[#242428] text-[#F2EFE9] hover:border-[#D49A2A]'
-                  }`}
-                >
-                  <span
-                    className={`block font-display text-[10px] font-bold uppercase tracking-wider ${
-                      isSelected ? 'text-[#0A0A0B]' : 'text-[#8A8A93]'
-                    }`}
-                  >
-                    {dayName} · {monthShort}
-                  </span>
-                  <span className="block font-mono-code text-xl font-bold mt-0.5">
-                    {dayNumber}
-                  </span>
-                  <span
-                    className={`block font-mono-code text-[10px] mt-1 ${
-                      isSelected ? 'text-[#0A0A0B]/80' : 'text-[#8A8A93]'
-                    }`}
-                  >
-                    {count} {count === 1 ? 'turno' : 'turnos'}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </section>
-
-      {/* 3-to-4 Column Tactile Grid of 30-Minute Blocks */}
-      {selectedDate && (
-        <section className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="font-display text-xs font-extrabold uppercase tracking-widest text-[#8A8A93]">
-              2. ELEGÍ TU BLOQUE EXACTO DE 30 MINUTOS
-            </h2>
-            <span className="font-mono-code text-[11px] text-[#D49A2A] flex items-center gap-1">
-              <Clock className="w-3.5 h-3.5" />
-              30 MIN ESTRICTOS
-            </span>
-          </div>
-
-          <div className="grid grid-cols-3 sm:grid-cols-4 gap-2.5">
-            {slotsForSelectedDate.map((slot) => {
-              const startLabel = formatTime30m(slot.start_time);
-              const endLabel = formatTime30m(slot.end_time);
-              const isSelected = selectedSlot?.id === slot.id;
-
-              return (
-                <button
-                  key={slot.id}
-                  type="button"
-                  onClick={() => onSelectSlot(isSelected ? null : slot)}
-                  className={`min-h-[58px] px-2.5 py-2.5 rounded-sm border flex flex-col items-center justify-center transition-colors ${
-                    isSelected
-                      ? 'bg-[#D49A2A] border-[#D49A2A] text-[#0A0A0B]'
-                      : 'bg-[#121214] border-[#242428] text-[#F2EFE9] hover:border-[#D49A2A]'
-                  }`}
-                >
-                  <span className="font-mono-code text-base font-bold tracking-tight">
-                    {startLabel}
-                  </span>
-                  <span
-                    className={`font-mono-code text-[10px] mt-0.5 ${
-                      isSelected ? 'text-[#0A0A0B]/80' : 'text-[#8A8A93]'
-                    }`}
-                  >
-                    a {endLabel}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </section>
-      )}
-
-      {/* Sticky Bottom Action Bar */}
-      <div className="fixed bottom-0 left-0 right-0 z-30 bg-[#121214] border-t border-[#242428] p-3.5 sm:px-6">
-        <div className="max-w-3xl mx-auto flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            {selectedSlot ? (
-              <>
-                <span className="block font-display text-[10px] uppercase tracking-wider text-[#D49A2A] font-bold">
-                  BLOQUE SELECCIONADO (30M)
-                </span>
-                <div className="flex items-baseline gap-2 truncate">
-                  <span className="font-mono-code text-sm sm:text-base font-bold text-[#F2EFE9]">
-                    {formatTime30m(selectedSlot.start_time)} –{' '}
-                    {formatTime30m(selectedSlot.end_time)}
-                  </span>
-                  <span className="font-mono-code text-xs text-[#8A8A93]">
-                    · {selectedDate}
-                  </span>
-                </div>
-              </>
-            ) : (
-              <>
-                <span className="block font-display text-[10px] uppercase tracking-wider text-[#8A8A93]">
-                  RESERVA CON SEÑA OBLIGATORIA
-                </span>
-                <span className="block font-mono-code text-xs sm:text-sm text-[#F2EFE9]">
-                  Tocá un horario de 30 min en la grilla
-                </span>
-              </>
-            )}
-          </div>
-
-          <button
-            type="button"
-            disabled={!selectedSlot || isLocking}
-            onClick={() => {
-              if (selectedSlot) {
-                onInitiateLock(selectedSlot);
-              }
-            }}
-            className="min-h-[48px] px-4 sm:px-6 rounded-sm bg-[#D49A2A] hover:bg-[#C85A32] disabled:bg-[#242428] disabled:text-[#8A8A93] text-[#0A0A0B] font-display uppercase font-extrabold text-xs sm:text-sm tracking-wider shrink-0 transition-colors"
-          >
-            {isLocking ? (
-              'BLOQUEANDO...'
-            ) : (
-              <>
-                SEÑAR TURNO ·{' '}
-                <span className="font-mono-code font-bold">$2.000</span>
-              </>
-            )}
-          </button>
-        </div>
-        {!user && selectedSlot && (
-          <div className="max-w-3xl mx-auto mt-1.5 text-[11px] text-[#8A8A93] font-mono-code">
-            Al tocar &ldquo;Señar turno · $2.000&rdquo; se pedirá tu DNI y
-            contraseña.
-          </div>
-        )}
-        <div className="max-w-3xl mx-auto mt-1.5 text-[10px] text-[#C85A32] font-mono-code">
-          {NON_REFUNDABLE_LEGEND}
         </div>
       </div>
 
-      {/* Checkout Mercado Pago (Sandbox Local) Modal */}
+      {/* 4. MODAL / BOTTOM-SHEET MINIMALISTA DE CONFIRMACIÓN (Solo DNI, Nombre y WhatsApp) */}
+      {isConfirmSheetOpen && selectedSlot && (
+        <div className="fixed inset-0 z-50 h-[100dvh] flex items-end sm:items-center justify-center bg-[#090D16]/80 backdrop-blur-xs p-0 sm:p-4 pointer-events-auto">
+          <div
+            className="fixed inset-0 z-40"
+            onClick={() => {
+              if (!isLocking) setIsConfirmSheetOpen(false);
+            }}
+          />
+
+          <div className="relative z-50 w-full max-w-md bg-[#0F172A] border-t sm:border border-[#1E293B] rounded-t-xl sm:rounded-xl p-5 space-y-4 max-h-[90dvh] overflow-y-auto pointer-events-auto shadow-2xl">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-base font-semibold text-[#F8FAFC]">
+                  Confirmar turno · {formatTime30m(selectedSlot.start_time)} hs
+                </h2>
+                <p className="text-xs text-[#94A3B8]">
+                  {formatDateHeader(selectedDate).dayName}{' '}
+                  {formatDateHeader(selectedDate).dayNumber}{' '}
+                  {formatDateHeader(selectedDate).monthShort} ·{' '}
+                  {schedule.barber.shop_name}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsConfirmSheetOpen(false)}
+                disabled={isLocking}
+                aria-label="Cerrar"
+                className="w-9 h-9 rounded-lg bg-[#090D16] border border-[#1E293B] hover:border-[#334155] flex items-center justify-center text-[#94A3B8] hover:text-[#F8FAFC] cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {confirmError && (
+              <div className="p-3 rounded-lg bg-[#090D16] border border-[#334155] flex items-center gap-2 text-xs text-[#F8FAFC]">
+                <ShieldAlert className="w-4 h-4 text-[#2563EB] shrink-0" />
+                <span>{confirmError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleConfirmSheetSubmit} className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-[#94A3B8] mb-1">
+                  DNI
+                </label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  required
+                  placeholder="Ej: 40123456"
+                  value={confirmDni}
+                  onChange={(e) =>
+                    setConfirmDni(e.target.value.replace(/\D/g, ''))
+                  }
+                  className="w-full min-h-[48px] px-3.5 rounded-lg bg-[#090D16] border border-[#1E293B] focus:border-[#2563EB] focus:outline-none text-sm text-[#F8FAFC]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-[#94A3B8] mb-1">
+                  Nombre
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Tu nombre y apellido"
+                  value={confirmName}
+                  onChange={(e) => setConfirmName(e.target.value)}
+                  className="w-full min-h-[48px] px-3.5 rounded-lg bg-[#090D16] border border-[#1E293B] focus:border-[#2563EB] focus:outline-none text-sm text-[#F8FAFC]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-[#94A3B8] mb-1">
+                  WhatsApp
+                </label>
+                <input
+                  type="tel"
+                  inputMode="tel"
+                  required
+                  placeholder="Ej: 11 5566 7788"
+                  value={confirmPhone}
+                  onChange={(e) => setConfirmPhone(e.target.value)}
+                  className="w-full min-h-[48px] px-3.5 rounded-lg bg-[#090D16] border border-[#1E293B] focus:border-[#2563EB] focus:outline-none text-sm text-[#F8FAFC]"
+                />
+              </div>
+
+              <p className="text-[11px] text-[#94A3B8] truncate">
+                La seña de $2.000 ARS asegura tu turno y no es reembolsable por
+                inasistencia.
+              </p>
+
+              <button
+                type="submit"
+                disabled={isLocking}
+                className="w-full min-h-[48px] rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-50 text-[#F8FAFC] text-sm font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer pointer-events-auto"
+              >
+                <CreditCard className="w-4 h-4" />
+                <span>
+                  {isLocking
+                    ? 'Redirigiendo a Mercado Pago...'
+                    : 'Ir a Mercado Pago · $2.000'}
+                </span>
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Checkout Mercado Pago Modal (para entorno Sandbox / Local y Desktop) */}
       <SandboxCheckoutModal
         isOpen={isSandboxCheckoutOpen}
         onClose={() => onSetSandboxCheckoutOpen(false)}

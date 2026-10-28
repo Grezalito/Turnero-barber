@@ -86,41 +86,37 @@ export const AuthBottomSheet: React.FC<AuthBottomSheetProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col justify-end bg-[#0A0A0B]/85 backdrop-blur-xs">
-      {/* Backdrop click */}
-      <div className="flex-1" onClick={onClose} />
+    <div className="fixed inset-0 z-50 h-[100dvh] flex items-end sm:items-center justify-center bg-[#090D16]/85 backdrop-blur-xs p-0 sm:p-4 pointer-events-auto">
+      <div className="fixed inset-0 z-40" onClick={onClose} />
 
-      {/* Bottom Sheet Panel */}
-      <div className="w-full max-w-lg mx-auto bg-[#121214] border-t border-x border-[#242428] rounded-t-md p-5 sm:p-6 shadow-2xl">
-        {/* Top Grab Bar */}
-        <div className="w-10 h-1 bg-[#242428] mx-auto mb-4 rounded-sm" />
-
-        <div className="flex items-start justify-between gap-4 mb-5">
+      <div className="relative z-50 w-full max-w-lg bg-[#0F172A] border-t sm:border border-[#1E293B] rounded-t-xl sm:rounded-xl p-5 sm:p-6 shadow-2xl max-h-[92dvh] overflow-y-auto pointer-events-auto">
+        <div className="flex items-start justify-between gap-4 mb-4">
           <div>
-            <span className="font-mono-code text-[11px] uppercase tracking-widest text-[#D49A2A]">
-              IDENTIFICACIÓN SIN EMAIL
+            <span className="text-xs font-medium text-[#94A3B8]">
+              Acceso para barberos y clientes
             </span>
-            <h2 className="font-display text-xl font-extrabold uppercase tracking-wide text-[#F2EFE9] mt-0.5">
-              {user ? 'PERFIL DE USUARIO' : 'ACCESO POR DNI'}
+            <h2 className="text-lg font-semibold text-[#F8FAFC] mt-0.5">
+              {user ? 'Mi cuenta' : 'Ingresar con DNI'}
             </h2>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="min-w-[44px] min-h-[44px] rounded-sm bg-[#0A0A0B] border border-[#242428] flex items-center justify-center text-[#8A8A93] hover:text-[#F2EFE9] hover:border-[#D49A2A]"
+            aria-label="Cerrar"
+            className="w-9 h-9 rounded-lg bg-[#090D16] border border-[#1E293B] hover:border-[#334155] flex items-center justify-center text-[#94A3B8] hover:text-[#F8FAFC] cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         {pendingSlotLabel && !user && (
-          <div className="mb-4 p-3 rounded-sm bg-[#0A0A0B] border border-[#D49A2A]/50 flex items-center justify-between">
+          <div className="mb-4 p-3 rounded-lg bg-[#090D16] border border-[#2563EB]/50 flex items-center justify-between">
             <div>
-              <p className="text-xs text-[#8A8A93]">
-                Iniciá sesión con tu DNI para bloquear el turno:
+              <p className="text-xs text-[#94A3B8]">
+                Iniciá sesión con tu DNI para reservar el turno:
               </p>
-              <p className="font-mono-code text-sm font-semibold text-[#D49A2A] mt-0.5">
-                {pendingSlotLabel} · SEÑA $2.000
+              <p className="text-sm font-semibold text-[#F8FAFC] mt-0.5">
+                {pendingSlotLabel} · Seña $2.000
               </p>
             </div>
           </div>
@@ -128,39 +124,27 @@ export const AuthBottomSheet: React.FC<AuthBottomSheetProps> = ({
 
         {user ? (
           <div className="space-y-4">
-            <div className="p-4 rounded-sm bg-[#0A0A0B] border border-[#242428] space-y-2.5">
+            <div className="p-4 rounded-lg bg-[#090D16] border border-[#1E293B] space-y-2.5 text-xs">
               <div className="flex items-center justify-between">
-                <span className="text-xs uppercase tracking-wider text-[#8A8A93]">
-                  ROL ACTIVO
-                </span>
-                <span className="font-mono-code text-xs px-2 py-0.5 rounded-sm bg-[#121214] border border-[#D49A2A] text-[#D49A2A]">
+                <span className="text-[#94A3B8]">Rol activo</span>
+                <span className="px-2.5 py-0.5 rounded-full bg-[#2563EB]/12 border border-[#2563EB]/30 font-semibold text-[#F8FAFC]">
                   {user.role}
                 </span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-xs uppercase tracking-wider text-[#8A8A93]">
-                  DNI
-                </span>
-                <span className="font-mono-code text-sm font-bold text-[#F2EFE9]">
-                  {user.dni}
-                </span>
+                <span className="text-[#94A3B8]">DNI</span>
+                <span className="font-semibold text-[#F8FAFC]">{user.dni}</span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-xs uppercase tracking-wider text-[#8A8A93]">
-                  NOMBRE
-                </span>
-                <span className="text-sm font-semibold text-[#F2EFE9]">
+                <span className="text-[#94A3B8]">Nombre</span>
+                <span className="font-semibold text-[#F8FAFC]">
                   {user.name}
                 </span>
               </div>
               {user.phone && (
                 <div className="flex items-center justify-between">
-                  <span className="text-xs uppercase tracking-wider text-[#8A8A93]">
-                    WHATSAPP
-                  </span>
-                  <span className="font-mono-code text-xs text-[#8A8A93]">
-                    {user.phone}
-                  </span>
+                  <span className="text-[#94A3B8]">WhatsApp</span>
+                  <span className="text-[#94A3B8]">{user.phone}</span>
                 </div>
               )}
             </div>
@@ -175,10 +159,10 @@ export const AuthBottomSheet: React.FC<AuthBottomSheetProps> = ({
                         onNavigateView('CLIENT_APPOINTMENTS');
                         onClose();
                       }}
-                      className="min-h-[44px] px-3 rounded-sm bg-[#D49A2A] hover:bg-[#C85A32] text-[#0A0A0B] font-display uppercase font-extrabold text-xs tracking-wider flex items-center justify-center gap-2 transition-colors"
+                      className="min-h-[44px] px-3 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] text-[#F8FAFC] text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer"
                     >
                       <TicketCheck className="w-4 h-4" />
-                      MIS TURNOS CONFIRMADOS
+                      Mis turnos confirmados
                     </button>
                     <button
                       type="button"
@@ -186,10 +170,10 @@ export const AuthBottomSheet: React.FC<AuthBottomSheetProps> = ({
                         onNavigateView('PUBLIC_BOOKING');
                         onClose();
                       }}
-                      className="min-h-[44px] px-3 rounded-sm bg-[#0A0A0B] border border-[#242428] hover:border-[#D49A2A] text-[#F2EFE9] font-display uppercase font-bold text-xs tracking-wider flex items-center justify-center gap-2 transition-colors"
+                      className="min-h-[44px] px-3 rounded-lg bg-[#090D16] border border-[#1E293B] hover:border-[#334155] text-[#F8FAFC] text-xs font-medium flex items-center justify-center gap-2 transition-colors cursor-pointer"
                     >
-                      <Calendar className="w-4 h-4 text-[#D49A2A]" />
-                      SEÑAR NUEVO TURNO
+                      <Calendar className="w-4 h-4 text-[#2563EB]" />
+                      Reservar nuevo turno
                     </button>
                   </>
                 )}
@@ -202,10 +186,10 @@ export const AuthBottomSheet: React.FC<AuthBottomSheetProps> = ({
                         onNavigateView('BARBER_PANEL');
                         onClose();
                       }}
-                      className="min-h-[44px] px-3 rounded-sm bg-[#D49A2A] hover:bg-[#C85A32] text-[#0A0A0B] font-display uppercase font-extrabold text-xs tracking-wider flex items-center justify-center gap-2 transition-colors"
+                      className="min-h-[44px] px-3 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] text-[#F8FAFC] text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer"
                     >
                       <Calendar className="w-4 h-4" />
-                      MI PANEL DE BARBERO
+                      Mi agenda de barbero
                     </button>
                     <button
                       type="button"
@@ -213,10 +197,10 @@ export const AuthBottomSheet: React.FC<AuthBottomSheetProps> = ({
                         onNavigateView('PUBLIC_BOOKING');
                         onClose();
                       }}
-                      className="min-h-[44px] px-3 rounded-sm bg-[#0A0A0B] border border-[#242428] hover:border-[#D49A2A] text-[#F2EFE9] font-display uppercase font-bold text-xs tracking-wider flex items-center justify-center gap-2 transition-colors"
+                      className="min-h-[44px] px-3 rounded-lg bg-[#090D16] border border-[#1E293B] hover:border-[#334155] text-[#F8FAFC] text-xs font-medium flex items-center justify-center gap-2 transition-colors cursor-pointer"
                     >
-                      <Eye className="w-4 h-4 text-[#D49A2A]" />
-                      VISTA PÚBLICA
+                      <Eye className="w-4 h-4 text-[#2563EB]" />
+                      Vista pública
                     </button>
                   </>
                 )}
@@ -229,10 +213,10 @@ export const AuthBottomSheet: React.FC<AuthBottomSheetProps> = ({
                         onNavigateView('SUPERADMIN_PANEL');
                         onClose();
                       }}
-                      className="min-h-[44px] px-3 rounded-sm bg-[#D49A2A] hover:bg-[#C85A32] text-[#0A0A0B] font-display uppercase font-extrabold text-xs tracking-wider flex items-center justify-center gap-2 transition-colors"
+                      className="min-h-[44px] px-3 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] text-[#F8FAFC] text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer"
                     >
                       <ShieldCheck className="w-4 h-4" />
-                      PANEL SUPERADMIN
+                      Panel SuperAdmin
                     </button>
                     <button
                       type="button"
@@ -240,10 +224,10 @@ export const AuthBottomSheet: React.FC<AuthBottomSheetProps> = ({
                         onNavigateView('PUBLIC_BOOKING');
                         onClose();
                       }}
-                      className="min-h-[44px] px-3 rounded-sm bg-[#0A0A0B] border border-[#242428] hover:border-[#D49A2A] text-[#F2EFE9] font-display uppercase font-bold text-xs tracking-wider flex items-center justify-center gap-2 transition-colors"
+                      className="min-h-[44px] px-3 rounded-lg bg-[#090D16] border border-[#1E293B] hover:border-[#334155] text-[#F8FAFC] text-xs font-medium flex items-center justify-center gap-2 transition-colors cursor-pointer"
                     >
-                      <Eye className="w-4 h-4 text-[#D49A2A]" />
-                      VISTA PÚBLICA
+                      <Eye className="w-4 h-4 text-[#2563EB]" />
+                      Vista pública
                     </button>
                   </>
                 )}
@@ -256,29 +240,28 @@ export const AuthBottomSheet: React.FC<AuthBottomSheetProps> = ({
                 onLogout();
                 onClose();
               }}
-              className="w-full min-h-[48px] rounded-sm bg-[#0A0A0B] border border-[#C85A32] text-[#C85A32] hover:bg-[#C85A32] hover:text-[#0A0A0B] font-display uppercase font-bold text-xs tracking-wider flex items-center justify-center gap-2 transition-colors"
+              className="w-full min-h-[44px] rounded-lg bg-[#090D16] border border-[#334155] hover:border-[#94A3B8] text-[#94A3B8] hover:text-[#F8FAFC] text-xs font-medium flex items-center justify-center gap-2 transition-colors cursor-pointer"
             >
               <LogOut className="w-4 h-4" />
-              CERRAR SESIÓN
+              Cerrar sesión
             </button>
           </div>
         ) : (
           <>
-            {/* Mode Switcher */}
-            <div className="grid grid-cols-2 gap-1 p-1 bg-[#0A0A0B] border border-[#242428] rounded-sm mb-4">
+            <div className="grid grid-cols-2 gap-1 p-1 bg-[#090D16] border border-[#1E293B] rounded-lg mb-4">
               <button
                 type="button"
                 onClick={() => {
                   setMode('LOGIN');
                   setError(null);
                 }}
-                className={`min-h-[40px] rounded-sm font-display text-xs uppercase font-bold tracking-wider transition-colors ${
+                className={`min-h-[40px] rounded-md text-xs font-semibold transition-colors cursor-pointer ${
                   mode === 'LOGIN'
-                    ? 'bg-[#D49A2A] text-[#0A0A0B]'
-                    : 'text-[#8A8A93] hover:text-[#F2EFE9]'
+                    ? 'bg-[#2563EB] text-[#F8FAFC]'
+                    : 'text-[#94A3B8] hover:text-[#F8FAFC]'
                 }`}
               >
-                YA TENGO CUENTA
+                Iniciar sesión
               </button>
               <button
                 type="button"
@@ -286,37 +269,37 @@ export const AuthBottomSheet: React.FC<AuthBottomSheetProps> = ({
                   setMode('REGISTER');
                   setError(null);
                 }}
-                className={`min-h-[40px] rounded-sm font-display text-xs uppercase font-bold tracking-wider transition-colors ${
+                className={`min-h-[40px] rounded-md text-xs font-semibold transition-colors cursor-pointer ${
                   mode === 'REGISTER'
-                    ? 'bg-[#D49A2A] text-[#0A0A0B]'
-                    : 'text-[#8A8A93] hover:text-[#F2EFE9]'
+                    ? 'bg-[#2563EB] text-[#F8FAFC]'
+                    : 'text-[#94A3B8] hover:text-[#F8FAFC]'
                 }`}
               >
-                SOY NUEVO CLIENTE
+                Crear cuenta
               </button>
             </div>
 
             {error && (
-              <div className="mb-4 p-3 rounded-sm bg-[#0A0A0B] border border-[#C85A32] flex items-center gap-2 text-xs text-[#C85A32]">
-                <ShieldAlert className="w-4 h-4 shrink-0" />
+              <div className="mb-4 p-3 rounded-lg bg-[#090D16] border border-[#334155] flex items-center gap-2 text-xs text-[#F8FAFC]">
+                <ShieldAlert className="w-4 h-4 text-[#2563EB] shrink-0" />
                 <span>{error}</span>
               </div>
             )}
 
-            <form onSubmit={handleSubmit} className="space-y-3.5">
+            <form onSubmit={handleSubmit} className="space-y-3">
               <div>
-                <label className="block text-[11px] font-display uppercase tracking-wider text-[#8A8A93] mb-1">
-                  NÚMERO DE DNI (SIN PUNTOS)
+                <label className="block text-xs font-medium text-[#94A3B8] mb-1">
+                  Número de DNI
                 </label>
                 <input
                   type="text"
                   inputMode="numeric"
                   pattern="[0-9]*"
                   required
-                  placeholder="Ej: 40123456"
+                  placeholder="Ej: 34888999"
                   value={dni}
                   onChange={(e) => setDni(e.target.value.replace(/\D/g, ''))}
-                  className="w-full min-h-[46px] px-3.5 rounded-sm bg-[#0A0A0B] border border-[#242428] focus:border-[#D49A2A] focus:outline-none font-mono-code text-base text-[#F2EFE9] placeholder:text-[#8A8A93]/40"
+                  className="w-full min-h-[46px] px-3.5 rounded-lg bg-[#090D16] border border-[#1E293B] focus:border-[#2563EB] focus:outline-none text-sm text-[#F8FAFC]"
                 />
               </div>
 
@@ -324,8 +307,8 @@ export const AuthBottomSheet: React.FC<AuthBottomSheetProps> = ({
                 <>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-[11px] font-display uppercase tracking-wider text-[#8A8A93] mb-1">
-                        NOMBRE Y APELLIDO
+                      <label className="block text-xs font-medium text-[#94A3B8] mb-1">
+                        Nombre y apellido
                       </label>
                       <input
                         type="text"
@@ -333,12 +316,12 @@ export const AuthBottomSheet: React.FC<AuthBottomSheetProps> = ({
                         placeholder="Juan Pérez"
                         value={name}
                         onChange={(e) => setName(e.target.value)}
-                        className="w-full min-h-[46px] px-3.5 rounded-sm bg-[#0A0A0B] border border-[#242428] focus:border-[#D49A2A] focus:outline-none text-sm text-[#F2EFE9] placeholder:text-[#8A8A93]/40"
+                        className="w-full min-h-[46px] px-3.5 rounded-lg bg-[#090D16] border border-[#1E293B] focus:border-[#2563EB] focus:outline-none text-sm text-[#F8FAFC]"
                       />
                     </div>
                     <div>
-                      <label className="block text-[11px] font-display uppercase tracking-wider text-[#8A8A93] mb-1">
-                        WHATSAPP
+                      <label className="block text-xs font-medium text-[#94A3B8] mb-1">
+                        WhatsApp
                       </label>
                       <input
                         type="tel"
@@ -347,28 +330,28 @@ export const AuthBottomSheet: React.FC<AuthBottomSheetProps> = ({
                         placeholder="+54911..."
                         value={phone}
                         onChange={(e) => setPhone(e.target.value)}
-                        className="w-full min-h-[46px] px-3.5 rounded-sm bg-[#0A0A0B] border border-[#242428] focus:border-[#D49A2A] focus:outline-none font-mono-code text-sm text-[#F2EFE9] placeholder:text-[#8A8A93]/40"
+                        className="w-full min-h-[46px] px-3.5 rounded-lg bg-[#090D16] border border-[#1E293B] focus:border-[#2563EB] focus:outline-none text-sm text-[#F8FAFC]"
                       />
                     </div>
                   </div>
                   <div>
-                    <label className="block text-[11px] font-display uppercase tracking-wider text-[#8A8A93] mb-1">
-                      EMAIL (OPCIONAL · PARA RECIBIR COMPROBANTE .ICS)
+                    <label className="block text-xs font-medium text-[#94A3B8] mb-1">
+                      Email (opcional)
                     </label>
                     <input
                       type="email"
-                      placeholder="cliente@correo.com (opcional)"
+                      placeholder="cliente@correo.com"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
-                      className="w-full min-h-[46px] px-3.5 rounded-sm bg-[#0A0A0B] border border-[#242428] focus:border-[#D49A2A] focus:outline-none font-mono-code text-sm text-[#F2EFE9] placeholder:text-[#8A8A93]/40"
+                      className="w-full min-h-[46px] px-3.5 rounded-lg bg-[#090D16] border border-[#1E293B] focus:border-[#2563EB] focus:outline-none text-sm text-[#F8FAFC]"
                     />
                   </div>
                 </>
               )}
 
               <div>
-                <label className="block text-[11px] font-display uppercase tracking-wider text-[#8A8A93] mb-1">
-                  CONTRASEÑA
+                <label className="block text-xs font-medium text-[#94A3B8] mb-1">
+                  Contraseña
                 </label>
                 <input
                   type="password"
@@ -377,32 +360,26 @@ export const AuthBottomSheet: React.FC<AuthBottomSheetProps> = ({
                   placeholder="••••••"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full min-h-[46px] px-3.5 rounded-sm bg-[#0A0A0B] border border-[#242428] focus:border-[#D49A2A] focus:outline-none font-mono-code text-base text-[#F2EFE9] placeholder:text-[#8A8A93]/40"
+                  className="w-full min-h-[46px] px-3.5 rounded-lg bg-[#090D16] border border-[#1E293B] focus:border-[#2563EB] focus:outline-none text-sm text-[#F8FAFC]"
                 />
               </div>
 
-              {/* Leyenda Obligatoria de Blindaje de Seña NO REEMBOLSABLE */}
-              <div className="p-3 rounded-sm bg-[#0A0A0B] border border-[#C85A32]/60 flex items-start gap-2">
-                <ShieldAlert className="w-4 h-4 text-[#C85A32] shrink-0 mt-0.5" />
-                <p className="font-mono-code text-[11px] text-[#F2EFE9] leading-relaxed">
-                  {NON_REFUNDABLE_LEGEND}
-                </p>
-              </div>
+              <p className="text-[11px] text-[#94A3B8]">{NON_REFUNDABLE_LEGEND}</p>
 
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full min-h-[48px] mt-2 rounded-sm bg-[#D49A2A] hover:bg-[#C85A32] text-[#0A0A0B] font-display uppercase font-extrabold text-sm tracking-wider flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
+                className="w-full min-h-[48px] mt-1 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] text-[#F8FAFC] text-sm font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50 cursor-pointer"
               >
                 {mode === 'LOGIN' ? (
                   <>
                     <KeyRound className="w-4 h-4" />
-                    {loading ? 'VERIFICANDO...' : 'INGRESAR CON DNI'}
+                    {loading ? 'Verificando...' : 'Ingresar con DNI'}
                   </>
                 ) : (
                   <>
                     <UserCheck className="w-4 h-4" />
-                    {loading ? 'CREANDO CUENTA...' : 'REGISTRAR DNI Y CONTINUAR'}
+                    {loading ? 'Creando cuenta...' : 'Registrarme y continuar'}
                   </>
                 )}
               </button>

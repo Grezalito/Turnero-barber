@@ -5,6 +5,7 @@ import { ClientAppointmentsView } from './components/ClientAppointmentsView';
 import { ActiveView, Header } from './components/Header';
 import {
   formatTime30m,
+  InlineBookingClientData,
   PublicBookingView,
 } from './components/PublicBookingView';
 import { SuperAdminView } from './components/SuperAdminView';
@@ -114,6 +115,7 @@ function buildInitialDemoSettlements(): WeeklySettlementItem[] {
 }
 
 function buildInitialDemoSchedule(slug: string): PublicBarberScheduleResponse {
+  const today = new Date().toISOString().slice(0, 10);
   const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000)
     .toISOString()
     .slice(0, 10);
@@ -146,6 +148,14 @@ function buildInitialDemoSchedule(slug: string): PublicBarberScheduleResponse {
     deposit_amount_ars: 2000,
     slot_duration_minutes: 30,
     dates: {
+      [today]: buildDaySlots(today, [
+        '11:00',
+        '11:30',
+        '12:00',
+        '16:30',
+        '17:00',
+        '18:00',
+      ]),
       [tomorrow]: buildDaySlots(tomorrow, [
         '10:00',
         '10:30',
@@ -172,6 +182,71 @@ function buildInitialDemoSchedule(slug: string): PublicBarberScheduleResponse {
       ]),
     },
   };
+}
+
+function buildInitialDemoBarberSlots(
+  publicDates: Record<string, AppointmentSlot[]>,
+): AppointmentSlot[] {
+  const today = new Date().toISOString().slice(0, 10);
+  const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 10);
+
+  const makeBooked = (
+    dateStr: string,
+    hhmm: string,
+    status: 'CONFIRMED' | 'PENDING_PAYMENT',
+    client: { id: string; dni: string; name: string; phone: string },
+  ): AppointmentSlot => {
+    const start = new Date(`${dateStr}T${hhmm}:00.000Z`);
+    const end = new Date(start.getTime() + 30 * 60 * 1000);
+    return {
+      id: `booked_${dateStr}_${hhmm.replace(':', '')}`,
+      start_time: start.toISOString(),
+      end_time: end.toISOString(),
+      status,
+      deposit_amount: 2000,
+      mp_payment_id:
+        status === 'CONFIRMED' ? `mp_pay_${hhmm.replace(':', '')}` : null,
+      client,
+    };
+  };
+
+  const demoBooked: AppointmentSlot[] = [
+    makeBooked(today, '10:00', 'CONFIRMED', {
+      id: 'c_1',
+      dni: '38451209',
+      name: 'Martín Echeverría',
+      phone: '+54 9 11 4455-8899',
+    }),
+    makeBooked(today, '10:30', 'CONFIRMED', {
+      id: 'c_2',
+      dni: '41209384',
+      name: 'Lucas Benítez',
+      phone: '+54 9 11 6789-1234',
+    }),
+    makeBooked(today, '15:00', 'CONFIRMED', {
+      id: 'c_3',
+      dni: '36998112',
+      name: 'Santiago Villalba',
+      phone: '+54 9 11 3344-7766',
+    }),
+    makeBooked(today, '16:00', 'PENDING_PAYMENT', {
+      id: 'c_4',
+      dni: '42887103',
+      name: 'Nicolás Roldán',
+      phone: '+54 9 11 5522-9911',
+    }),
+    makeBooked(tomorrow, '09:30', 'CONFIRMED', {
+      id: 'c_5',
+      dni: '39112445',
+      name: 'Agustín Pereyra',
+      phone: '+54 9 11 2233-4455',
+    }),
+  ];
+
+  const availableFlat = Object.values(publicDates).flat();
+  return [...demoBooked, ...availableFlat];
 }
 
 export const App: React.FC = () => {
@@ -217,9 +292,13 @@ export const App: React.FC = () => {
   const [loadingClientSlots, setLoadingClientSlots] = useState(false);
 
   // Barber panel state
-  const [barberSlots, setBarberSlots] = useState<AppointmentSlot[]>([]);
+  const [barberSlots, setBarberSlots] = useState<AppointmentSlot[]>(() =>
+    buildInitialDemoBarberSlots(
+      buildInitialDemoSchedule('obsidian-studio').dates,
+    ),
+  );
   const [barberWeeklyGoal, setBarberWeeklyGoal] =
-    useState<WeeklyGoalMetrics | null>(() => calculateWeeklyGoalMetrics(22));
+    useState<WeeklyGoalMetrics | null>(() => calculateWeeklyGoalMetrics(12));
   const [barberInfo, setBarberInfo] = useState<{
     id: string;
     slug: string;
@@ -295,8 +374,9 @@ export const App: React.FC = () => {
         setBarberWeeklyGoal(data.weekly_goal);
       }
     } catch {
-      const allSlots = Object.values(schedule.dates).flat();
-      setBarberSlots(allSlots);
+      setBarberSlots((prev) =>
+        prev.length > 0 ? prev : buildInitialDemoBarberSlots(schedule.dates),
+      );
     }
   }, [schedule.dates]);
 
@@ -344,7 +424,12 @@ export const App: React.FC = () => {
 
   const executeLockForSlot = async (
     slot: AppointmentSlot,
-    credentials?: { dni: string; password: string },
+    credentials?: {
+      dni: string;
+      password: string;
+      name?: string;
+      phone?: string;
+    },
   ) => {
     setIsLocking(true);
     setConfirmedSlotInfo(null);
@@ -356,9 +441,17 @@ export const App: React.FC = () => {
       }
       setActiveLock(lockRes);
       setSelectedSlot(null);
-      if (lockRes.payment.is_sandbox_local !== false) {
-        setIsSandboxCheckoutOpen(true);
+      const paymentUrl =
+        lockRes.payment.init_point || lockRes.payment.sandbox_init_point;
+      if (
+        lockRes.payment.is_sandbox_local === false &&
+        paymentUrl &&
+        paymentUrl.startsWith('http')
+      ) {
+        window.location.href = paymentUrl;
+        return;
       }
+      setIsSandboxCheckoutOpen(true);
       await loadPublicSchedule(slug);
       await loadClientAppointments();
     } catch (err) {
@@ -367,6 +460,18 @@ export const App: React.FC = () => {
         setStatusMessage(msg);
         await loadPublicSchedule(slug);
         return;
+      }
+
+      if (credentials) {
+        const fallbackUser: User = {
+          id: `usr_${credentials.dni}`,
+          dni: credentials.dni,
+          name: credentials.name || user?.name || `Cliente DNI ${credentials.dni}`,
+          phone: credentials.phone || user?.phone || '+5491100000000',
+          role: 'CLIENT',
+        };
+        saveSession(`demo_jwt_${credentials.dni}`, fallbackUser);
+        setUser(fallbackUser);
       }
 
       // Fallback local atómico si el backend está offline durante la prueba visual
@@ -401,7 +506,19 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleInitiateLock = async (slot: AppointmentSlot) => {
+  const handleInitiateLock = async (
+    slot: AppointmentSlot,
+    clientData?: InlineBookingClientData,
+  ) => {
+    if (clientData) {
+      await executeLockForSlot(slot, {
+        dni: clientData.dni,
+        password: clientData.password || clientData.dni.padStart(6, '0'),
+        name: clientData.name,
+        phone: clientData.phone,
+      });
+      return;
+    }
     if (!user) {
       setPendingSlotForAuth(slot);
       setIsAuthSheetOpen(true);
@@ -633,14 +750,20 @@ export const App: React.FC = () => {
   const confirmedClientCount = clientSlots.filter(
     (s) => s.status === 'CONFIRMED',
   ).length;
+  const totalAvailablePublicSlots = Object.values(schedule.dates).reduce(
+    (acc, list) => acc + list.length,
+    0,
+  );
 
   return (
-    <div className="min-h-screen bg-[#0A0A0B] text-[#F2EFE9]">
+    <div className="min-h-[100dvh] w-full overflow-x-hidden bg-[#090D16] text-[#F8FAFC]">
       <Header
         user={user}
         activeView={activeView}
         onChangeView={setActiveView}
         currentSlug={slug}
+        shopName={schedule.barber.shop_name}
+        availableCount={totalAvailablePublicSlots}
         clientConfirmedCount={confirmedClientCount}
         onOpenAuthSheet={() => {
           setPendingSlotForAuth(null);
@@ -648,9 +771,9 @@ export const App: React.FC = () => {
         }}
       />
 
-      <main className="max-w-3xl mx-auto pt-20 px-4">
+      <main className="max-w-3xl mx-auto pt-14 px-3.5 sm:px-4">
         {statusMessage && (
-          <div className="mb-4 p-3 rounded-sm bg-[#121214] border border-[#D49A2A] font-mono-code text-xs text-[#D49A2A]">
+          <div className="mb-3 p-3 rounded-lg bg-[#0F172A] border border-[#2563EB] text-xs font-medium text-[#F8FAFC]">
             {statusMessage}
           </div>
         )}

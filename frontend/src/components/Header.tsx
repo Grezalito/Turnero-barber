@@ -3,10 +3,9 @@ import {
   Scissors,
   ShieldCheck,
   Calendar,
-  User as UserIcon,
   Eye,
   TicketCheck,
-  PlusCircle,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { User } from '../types/api';
 
@@ -22,6 +21,8 @@ interface HeaderProps {
   onChangeView: (view: ActiveView) => void;
   onOpenAuthSheet: () => void;
   currentSlug?: string;
+  shopName?: string;
+  availableCount?: number;
   clientConfirmedCount?: number;
 }
 
@@ -30,80 +31,59 @@ export const Header: React.FC<HeaderProps> = ({
   activeView,
   onChangeView,
   onOpenAuthSheet,
-  currentSlug = 'obsidian-studio',
+  shopName = 'Obsidian Barber Studio',
+  availableCount = 12,
   clientConfirmedCount = 0,
 }) => {
   return (
-    <header className="fixed top-0 left-0 right-0 z-40 h-16 bg-[#0A0A0B]/95 backdrop-blur-xs border-b border-[#242428]">
-      <div className="max-w-3xl mx-auto h-full px-4 flex items-center justify-between gap-2">
-        {/* Left: Editorial Brand Logo */}
+    <header className="fixed top-0 left-0 right-0 z-40 h-12 max-h-[48px] bg-[#090D16]/95 backdrop-blur-md border-b border-[#1E293B]">
+      <div className="max-w-3xl mx-auto h-full px-3 sm:px-4 flex items-center justify-between gap-2 overflow-hidden">
+        {/* Left: Avatar chico de la barbería + Nombre */}
         <button
           type="button"
           onClick={() => onChangeView('PUBLIC_BOOKING')}
-          className="flex items-center gap-2.5 text-left group focus:outline-none shrink-0"
+          className="h-9 flex items-center gap-2.5 text-left focus:outline-none min-w-0"
         >
-          <div className="w-9 h-9 rounded-sm bg-[#121214] border border-[#242428] group-hover:border-[#D49A2A] flex items-center justify-center transition-colors">
-            <Scissors className="w-4 h-4 text-[#D49A2A]" />
+          <div className="w-8 h-8 rounded-md bg-[#0F172A] border border-[#1E293B] flex items-center justify-center shrink-0">
+            <Scissors className="w-4 h-4 text-[#2563EB]" />
           </div>
-          <div>
-            <span className="block font-display text-sm sm:text-base font-extrabold uppercase tracking-wider text-[#F2EFE9] leading-none">
-              OBSIDIAN BARBER
-            </span>
-            <span className="block font-mono-code text-[10px] tracking-widest uppercase text-[#8A8A93] mt-0.5">
-              SLOTS 30 MIN · SEÑA $2.000
-            </span>
-          </div>
+          <span className="text-sm font-semibold text-[#F8FAFC] truncate">
+            {shopName}
+          </span>
         </button>
 
-        {/* Right: Role Navigation + Personita Auth Button (min 44x44px) */}
-        <div className="flex items-center gap-1.5 sm:gap-2">
-          {/* CLIENT Navigation: Mis Turnos <-> Señar Turno */}
-          {user?.role === 'CLIENT' && (
-            <>
-              <button
-                type="button"
-                onClick={() =>
-                  onChangeView(
-                    activeView === 'CLIENT_APPOINTMENTS'
-                      ? 'PUBLIC_BOOKING'
-                      : 'CLIENT_APPOINTMENTS',
-                  )
-                }
-                className={`min-h-[44px] px-2.5 sm:px-3 rounded-sm border text-xs font-display uppercase font-bold tracking-wider flex items-center gap-1.5 transition-colors ${
-                  activeView === 'CLIENT_APPOINTMENTS'
-                    ? 'bg-[#D49A2A] text-[#0A0A0B] border-[#D49A2A]'
-                    : 'bg-[#121214] text-[#F2EFE9] border-[#242428] hover:border-[#D49A2A]'
-                }`}
-              >
-                <TicketCheck className="w-3.5 h-3.5 shrink-0" />
-                <span>Mis Turnos</span>
-                {clientConfirmedCount > 0 && (
-                  <span
-                    className={`font-mono-code text-[10px] px-1.5 py-0.2 rounded-sm ${
-                      activeView === 'CLIENT_APPOINTMENTS'
-                        ? 'bg-[#0A0A0B] text-[#D49A2A]'
-                        : 'bg-[#D49A2A] text-[#0A0A0B]'
-                    }`}
-                  >
-                    {clientConfirmedCount}
-                  </span>
-                )}
-              </button>
-
-              {activeView === 'CLIENT_APPOINTMENTS' && (
-                <button
-                  type="button"
-                  onClick={() => onChangeView('PUBLIC_BOOKING')}
-                  className="hidden sm:flex min-h-[44px] px-3 rounded-sm border border-[#242428] hover:border-[#D49A2A] bg-[#121214] text-[#F2EFE9] text-xs font-display uppercase font-bold tracking-wider items-center gap-1.5 transition-colors"
-                >
-                  <PlusCircle className="w-3.5 h-3.5 text-[#D49A2A]" />
-                  <span>Señar Turno</span>
-                </button>
-              )}
-            </>
+        {/* Right: Estado de Turnos Disponibles + Navegación de Rol si aplica (sin botones/textos de login/registro visibles) */}
+        <div className="flex items-center gap-2 shrink-0">
+          {activeView === 'PUBLIC_BOOKING' && (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#2563EB]/12 border border-[#2563EB]/30 text-[11px] font-medium text-[#F8FAFC]">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#2563EB]" />
+              <span>
+                {availableCount > 0 ? 'Turnos disponibles' : 'Sin cupos hoy'}
+              </span>
+            </span>
           )}
 
-          {/* BARBER Navigation: Panel de Control <-> Vista Pública (/obsidian-studio) */}
+          {user?.role === 'CLIENT' && clientConfirmedCount > 0 && (
+            <button
+              type="button"
+              onClick={() =>
+                onChangeView(
+                  activeView === 'CLIENT_APPOINTMENTS'
+                    ? 'PUBLIC_BOOKING'
+                    : 'CLIENT_APPOINTMENTS',
+                )
+              }
+              className={`h-8 px-2.5 rounded-md border text-xs font-medium flex items-center gap-1.5 transition-colors ${
+                activeView === 'CLIENT_APPOINTMENTS'
+                  ? 'bg-[#2563EB] text-[#F8FAFC] border-[#2563EB]'
+                  : 'bg-[#0F172A] text-[#F8FAFC] border-[#1E293B] hover:border-[#334155]'
+              }`}
+            >
+              <TicketCheck className="w-3.5 h-3.5 shrink-0" />
+              <span>Mis turnos ({clientConfirmedCount})</span>
+            </button>
+          )}
+
           {user?.role === 'BARBER' && (
             <button
               type="button"
@@ -114,30 +94,22 @@ export const Header: React.FC<HeaderProps> = ({
                     : 'BARBER_PANEL',
                 )
               }
-              className={`min-h-[44px] px-2.5 sm:px-3 rounded-sm border text-xs font-display uppercase font-bold tracking-wider flex items-center gap-1.5 transition-colors ${
-                activeView === 'BARBER_PANEL'
-                  ? 'bg-[#121214] text-[#F2EFE9] border-[#D49A2A] hover:bg-[#D49A2A] hover:text-[#0A0A0B]'
-                  : 'bg-[#D49A2A] text-[#0A0A0B] border-[#D49A2A] hover:bg-[#C85A32]'
-              }`}
+              className="h-8 px-2.5 rounded-md border border-[#1E293B] hover:border-[#334155] bg-[#0F172A] text-[#F8FAFC] text-xs font-medium flex items-center gap-1.5 transition-colors"
             >
               {activeView === 'BARBER_PANEL' ? (
                 <>
-                  <Eye className="w-3.5 h-3.5 text-[#D49A2A] shrink-0" />
-                  <span className="hidden sm:inline">Vista Pública</span>
-                  <span className="font-mono-code text-[10px] text-[#8A8A93] hidden md:inline">
-                    (/{currentSlug})
-                  </span>
+                  <Eye className="w-3.5 h-3.5 text-[#2563EB]" />
+                  <span>Vista pública</span>
                 </>
               ) : (
                 <>
-                  <Calendar className="w-3.5 h-3.5 shrink-0" />
-                  <span>Panel Barbero</span>
+                  <Calendar className="w-3.5 h-3.5 text-[#2563EB]" />
+                  <span>Agenda barbero</span>
                 </>
               )}
             </button>
           )}
 
-          {/* SUPERADMIN Navigation: Panel SuperAdmin <-> Vista Pública (/obsidian-studio) */}
           {user?.role === 'SUPERADMIN' && (
             <button
               type="button"
@@ -148,62 +120,30 @@ export const Header: React.FC<HeaderProps> = ({
                     : 'SUPERADMIN_PANEL',
                 )
               }
-              className={`min-h-[44px] px-2.5 sm:px-3 rounded-sm border text-xs font-display uppercase font-bold tracking-wider flex items-center gap-1.5 transition-colors ${
-                activeView === 'SUPERADMIN_PANEL'
-                  ? 'bg-[#121214] text-[#F2EFE9] border-[#D49A2A] hover:bg-[#D49A2A] hover:text-[#0A0A0B]'
-                  : 'bg-[#D49A2A] text-[#0A0A0B] border-[#D49A2A] hover:bg-[#C85A32]'
-              }`}
+              className="h-8 px-2.5 rounded-md border border-[#1E293B] hover:border-[#334155] bg-[#0F172A] text-[#F8FAFC] text-xs font-medium flex items-center gap-1.5 transition-colors"
             >
               {activeView === 'SUPERADMIN_PANEL' ? (
                 <>
-                  <Eye className="w-3.5 h-3.5 text-[#D49A2A] shrink-0" />
-                  <span className="hidden sm:inline">Vista Pública</span>
-                  <span className="font-mono-code text-[10px] text-[#8A8A93] hidden md:inline">
-                    (/{currentSlug})
-                  </span>
+                  <Eye className="w-3.5 h-3.5 text-[#2563EB]" />
+                  <span>Vista pública</span>
                 </>
               ) : (
                 <>
-                  <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
-                  <span>Panel SuperAdmin</span>
+                  <ShieldCheck className="w-3.5 h-3.5 text-[#2563EB]" />
+                  <span>Admin</span>
                 </>
               )}
             </button>
           )}
 
-          {/* Personita Session Button (min 44x44px) */}
+          {/* Acceso discreto solo por ícono para cambio de vista barbero/admin en pruebas */}
           <button
             type="button"
             onClick={onOpenAuthSheet}
-            aria-label={
-              user ? `Sesión activa DNI ${user.dni}` : 'Iniciar sesión con DNI'
-            }
-            className={`min-w-[44px] min-h-[44px] px-2.5 sm:px-3 rounded-sm border flex items-center justify-center gap-2 transition-colors ${
-              user
-                ? 'bg-[#121214] border-[#D49A2A] text-[#F2EFE9]'
-                : 'bg-[#121214] border-[#242428] text-[#F2EFE9] hover:border-[#D49A2A]'
-            }`}
+            aria-label="Opciones de barbería"
+            className="w-8 h-8 rounded-md bg-[#0F172A] border border-[#1E293B] hover:border-[#334155] flex items-center justify-center text-[#94A3B8] hover:text-[#F8FAFC] transition-colors"
           >
-            <div className="relative flex items-center justify-center">
-              <UserIcon className="w-4 h-4 text-[#D49A2A] shrink-0" />
-              {user && (
-                <span className="w-2 h-2 rounded-full bg-[#D49A2A] absolute -top-0.5 -right-0.5" />
-              )}
-            </div>
-            {user ? (
-              <div className="hidden sm:flex flex-col items-start leading-none">
-                <span className="font-display text-[9px] uppercase font-bold tracking-wider text-[#D49A2A]">
-                  {user.role}
-                </span>
-                <span className="font-mono-code text-xs text-[#F2EFE9] mt-0.5">
-                  {user.dni}
-                </span>
-              </div>
-            ) : (
-              <span className="font-mono-code text-xs text-[#8A8A93] hidden sm:inline">
-                DNI
-              </span>
-            )}
+            <SlidersHorizontal className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
