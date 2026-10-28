@@ -1,8 +1,16 @@
+import { CreatePreferenceDto } from './dto/create-preference.dto';
 import { MercadoPagoWebhookDto } from './dto/mp-webhook.dto';
 import { PaymentsService } from './payments.service';
 export declare class PaymentsController {
     private readonly paymentsService;
     constructor(paymentsService: PaymentsService);
+    createPreference(dto: CreatePreferenceDto): Promise<{
+        init_point: string;
+        sandbox_init_point: string;
+        preference_id: string;
+        slot_id: string;
+        deposit_amount: number;
+    }>;
     handleMercadoPagoWebhook(dto: MercadoPagoWebhookDto, query: Record<string, string | undefined>): Promise<{
         idempotent: boolean;
         status: import(".prisma/client").$Enums.SlotStatus;

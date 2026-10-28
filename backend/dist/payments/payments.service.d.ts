@@ -2,8 +2,10 @@ import { ConfigService } from '@nestjs/config';
 import { MailService } from '../mail/mail.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { IReminderProvider } from '../reminders/reminder.interface';
+import { CreatePreferenceDto } from './dto/create-preference.dto';
 import { MercadoPagoWebhookDto } from './dto/mp-webhook.dto';
 export declare const PLATFORM_DEPOSIT_ARS = 2000;
+export declare const LOCK_DURATION_MS: number;
 export declare const NON_REFUNDABLE_DEPOSIT_POLICY = "Reserva garantizada: la se\u00F1a de $2.000 ARS no es reembolsable ni transferible ante cancelaciones o inasistencias";
 export interface PreferenceResult {
     preference_id: string;
@@ -20,11 +22,19 @@ export declare class PaymentsService {
     private readonly reminderProvider;
     private readonly logger;
     constructor(prisma: PrismaService, configService: ConfigService, mailService: MailService, reminderProvider: IReminderProvider);
+    createPreferenceForSlot(dto: CreatePreferenceDto): Promise<{
+        init_point: string;
+        sandbox_init_point: string;
+        preference_id: string;
+        slot_id: string;
+        deposit_amount: number;
+    }>;
     createDepositPreference(params: {
         slotId: string;
         shopName: string;
         startTime: Date;
         clientDni: string;
+        clientName?: string;
     }): Promise<PreferenceResult>;
     handleWebhook(dto: MercadoPagoWebhookDto, query: Record<string, string | undefined>): Promise<{
         idempotent: boolean;

@@ -14,17 +14,29 @@ var __param = (this && this.__param) || function (paramIndex, decorator) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.PaymentsController = void 0;
 const common_1 = require("@nestjs/common");
+const create_preference_dto_1 = require("./dto/create-preference.dto");
 const mp_webhook_dto_1 = require("./dto/mp-webhook.dto");
 const payments_service_1 = require("./payments.service");
 let PaymentsController = class PaymentsController {
     constructor(paymentsService) {
         this.paymentsService = paymentsService;
     }
+    async createPreference(dto) {
+        return this.paymentsService.createPreferenceForSlot(dto);
+    }
     async handleMercadoPagoWebhook(dto, query) {
         return this.paymentsService.handleWebhook(dto, query);
     }
 };
 exports.PaymentsController = PaymentsController;
+__decorate([
+    (0, common_1.Post)('create-preference'),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [create_preference_dto_1.CreatePreferenceDto]),
+    __metadata("design:returntype", Promise)
+], PaymentsController.prototype, "createPreference", null);
 __decorate([
     (0, common_1.Post)('webhook'),
     (0, common_1.HttpCode)(common_1.HttpStatus.OK),

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   CalendarPlus,
   Clock,
@@ -16,7 +16,11 @@ import {
   Scissors,
   SlidersHorizontal,
   CalendarCheck2,
+  Copy,
+  Check,
+  Link2,
 } from 'lucide-react';
+import { api, getSlugFromAuthContext } from '../services/api';
 import { AppointmentSlot, WeeklyGoalMetrics } from '../types/api';
 import {
   calculateWeeklyGoalMetrics,
@@ -125,6 +129,59 @@ export const BarberDashboardView: React.FC<BarberDashboardViewProps> = ({
   const [isBonusModalOpen, setIsBonusModalOpen] = useState<boolean>(false);
   const [isScheduleConfigOpen, setIsScheduleConfigOpen] =
     useState<boolean>(false);
+
+  // Slug del barbero obtenido de contexto de autenticación, GET /barbers/me o perfil
+  const [resolvedSlug, setResolvedSlug] = useState<string>(
+    () => getSlugFromAuthContext() || barberInfo.slug || 'obsidian-studio',
+  );
+  const [copiedLink, setCopiedLink] = useState<boolean>(false);
+
+  useEffect(() => {
+    const authSlug = getSlugFromAuthContext();
+    if (authSlug) {
+      setResolvedSlug(authSlug);
+    } else if (barberInfo.slug) {
+      setResolvedSlug(barberInfo.slug);
+    }
+
+    api
+      .getBarberMe()
+      .then((res) => {
+        if (res?.slug) {
+          setResolvedSlug(res.slug);
+        }
+      })
+      .catch(() => {
+        // conservar slug actual de sesión o perfil
+      });
+  }, [barberInfo.slug]);
+
+  const barberSlug = resolvedSlug || barberInfo.slug || 'obsidian-studio';
+  const shareableBookingUrl =
+    typeof window !== 'undefined'
+      ? `${window.location.origin}/${barberSlug}`
+      : `http://localhost:5173/${barberSlug}`;
+  const whatsappShareBookingUrl = `https://wa.me/?text=${encodeURIComponent(
+    `¡Hola! Podés reservar y señar tu turno acá: ${shareableBookingUrl}`,
+  )}`;
+
+  const handleCopyBookingLink = async () => {
+    try {
+      await navigator.clipboard.writeText(shareableBookingUrl);
+      setCopiedLink(true);
+      setTimeout(() => setCopiedLink(false), 2000);
+    } catch {
+      // Fallback para navegadores sin permiso directo de clipboard
+      const textArea = document.createElement('textarea');
+      textArea.value = shareableBookingUrl;
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textArea);
+      setCopiedLink(true);
+      setTimeout(() => setCopiedLink(false), 2000);
+    }
+  };
 
   const liveWeeklyMetrics = useMemo<WeeklyGoalMetrics>(() => {
     if (weeklyGoal) {
@@ -312,6 +369,61 @@ export const BarberDashboardView: React.FC<BarberDashboardViewProps> = ({
 
   return (
     <div className="pb-24 space-y-4 max-w-full overflow-x-hidden">
+      {/* TARJETA DESTACADA ARRIBA DE TODO: "Tu Link de Turnos" */}
+      <section className="p-4 rounded-xl bg-[#0F172A] border border-[#2563EB]/50 space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-lg bg-[#2563EB]/12 border border-[#2563EB]/30 flex items-center justify-center text-[#2563EB] shrink-0">
+              <Link2 className="w-4 h-4" />
+            </div>
+            <div>
+              <h2 className="text-sm font-semibold text-[#F8FAFC]">
+                Tu Link de Turnos
+              </h2>
+              <p className="text-[11px] text-[#94A3B8]">
+                Compartilo en tu biografía de Instagram o por WhatsApp
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="px-3.5 py-2.5 rounded-lg bg-[#090D16] border border-[#1E293B] flex items-center justify-between gap-2 overflow-hidden">
+          <span className="text-xs sm:text-sm font-medium text-[#F8FAFC] truncate select-all">
+            {shareableBookingUrl}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={handleCopyBookingLink}
+            className="min-h-[44px] px-3.5 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] text-[#F8FAFC] text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer"
+          >
+            {copiedLink ? (
+              <>
+                <Check className="w-4 h-4 shrink-0" />
+                <span>¡Copiado!</span>
+              </>
+            ) : (
+              <>
+                <Copy className="w-4 h-4 shrink-0" />
+                <span>Copiar Link</span>
+              </>
+            )}
+          </button>
+
+          <a
+            href={whatsappShareBookingUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="min-h-[44px] px-3.5 rounded-lg bg-[#090D16] border border-[#334155] hover:border-[#2563EB] text-[#F8FAFC] text-xs font-semibold flex items-center justify-center gap-2 transition-colors"
+          >
+            <MessageCircle className="w-4 h-4 text-[#10B981] shrink-0" />
+            <span>Compartir en WhatsApp</span>
+          </a>
+        </div>
+      </section>
+
       {/* Cabecera Compacta del Barbero */}
       <section className="p-4 rounded-xl bg-[#0F172A] border border-[#1E293B] flex items-center justify-between gap-3">
         <div className="min-w-0">

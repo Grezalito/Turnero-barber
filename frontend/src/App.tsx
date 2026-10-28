@@ -249,9 +249,29 @@ function buildInitialDemoBarberSlots(
   return [...demoBooked, ...availableFlat];
 }
 
+function resolveSlugFromPathname(pathname: string): string | null {
+  const bMatch = pathname.match(/^\/b\/([a-z0-9-]+)\/?$/i);
+  if (bMatch) return bMatch[1].toLowerCase();
+
+  const directMatch = pathname.match(/^\/([a-z0-9-]+)\/?$/i);
+  if (directMatch) {
+    const candidate = directMatch[1].toLowerCase();
+    const reserved = new Set(['admin', 'panel', 'login', 'auth']);
+    if (!reserved.has(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
 export const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(() => getStoredUser());
+  const [slug, setSlug] = useState<string>(() => {
+    return resolveSlugFromPathname(window.location.pathname) || 'obsidian-studio';
+  });
   const [activeView, setActiveView] = useState<ActiveView>(() => {
+    const pathSlug = resolveSlugFromPathname(window.location.pathname);
+    if (pathSlug) return 'PUBLIC_BOOKING';
     const u = getStoredUser();
     if (u?.role === 'BARBER') return 'BARBER_PANEL';
     if (u?.role === 'SUPERADMIN') return 'SUPERADMIN_PANEL';
@@ -259,13 +279,10 @@ export const App: React.FC = () => {
   });
   const [isAuthSheetOpen, setIsAuthSheetOpen] = useState(false);
 
-  const [slug, setSlug] = useState<string>(() => {
-    const pathMatch = window.location.pathname.match(/^\/b\/([a-z0-9-]+)/i);
-    return pathMatch ? pathMatch[1] : 'obsidian-studio';
-  });
-
   const [schedule, setSchedule] = useState<PublicBarberScheduleResponse>(() =>
-    buildInitialDemoSchedule('obsidian-studio'),
+    buildInitialDemoSchedule(
+      resolveSlugFromPathname(window.location.pathname) || 'obsidian-studio',
+    ),
   );
   const [selectedSlot, setSelectedSlot] = useState<AppointmentSlot | null>(
     null,
@@ -393,6 +410,18 @@ export const App: React.FC = () => {
     } catch {
       // Conservar lista actual en modo preview
     }
+  }, []);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      const pathSlug = resolveSlugFromPathname(window.location.pathname);
+      if (pathSlug) {
+        setSlug(pathSlug);
+        setActiveView('PUBLIC_BOOKING');
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
   useEffect(() => {
@@ -840,7 +869,9 @@ export const App: React.FC = () => {
             slots={barberSlots}
             weeklyGoal={barberWeeklyGoal}
             onSwitchToPublicView={() => {
-              setSlug(barberInfo.slug);
+              const targetSlug = barberInfo.slug || slug;
+              setSlug(targetSlug);
+              window.history.pushState({}, '', `/${targetSlug}`);
               setActiveView('PUBLIC_BOOKING');
             }}
             onGenerateRange={async ({

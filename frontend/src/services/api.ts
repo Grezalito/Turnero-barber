@@ -31,6 +31,25 @@ export function getStoredUser(): User | null {
   }
 }
 
+export function getSlugFromAuthContext(): string | null {
+  const storedUser = getStoredUser();
+  if (storedUser?.barber_profile?.slug) {
+    return storedUser.barber_profile.slug;
+  }
+  const token = getStoredToken();
+  if (!token) return null;
+  try {
+    const parts = token.split('.');
+    if (parts.length === 3) {
+      const payload = JSON.parse(atob(parts[1])) as { slug?: string };
+      if (payload.slug) return payload.slug;
+    }
+  } catch {
+    // ignore invalid jwt format
+  }
+  return null;
+}
+
 export function saveSession(token: string, user: User) {
   localStorage.setItem(TOKEN_STORAGE_KEY, token);
   localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user));
@@ -182,6 +201,42 @@ export const api = {
       saveSession(res.access_token, res.user);
     }
     return res;
+  },
+
+  async createPaymentPreference(payload: {
+    slotId: string;
+    clientDni: string;
+    clientName: string;
+    clientPhone: string;
+  }): Promise<{
+    init_point: string;
+    sandbox_init_point?: string;
+    preference_id?: string;
+    slot_id?: string;
+  }> {
+    return request<{
+      init_point: string;
+      sandbox_init_point?: string;
+      preference_id?: string;
+      slot_id?: string;
+    }>('/payments/create-preference', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async getBarberMe(): Promise<{
+    user: User | null;
+    barber: {
+      id: string;
+      slug: string;
+      shop_name: string;
+      address?: string | null;
+      reminder_addon_active: boolean;
+    } | null;
+    slug: string | null;
+  }> {
+    return request('/barbers/me');
   },
 
   async simulateMercadoPagoWebhook(

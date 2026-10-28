@@ -2,8 +2,6 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   Clock,
   CheckCircle2,
-  Lock,
-  Sparkles,
   CreditCard,
   TicketCheck,
   CalendarPlus,
@@ -12,6 +10,7 @@ import {
   ShieldAlert,
   X,
   CalendarX2,
+  Loader2,
 } from 'lucide-react';
 import { api } from '../services/api';
 import {
@@ -24,7 +23,6 @@ import {
   buildGoogleCalendarUrl,
   buildWhatsAppShareUrl,
 } from '../utils/postBookingAndGamification';
-import { SandboxCheckoutModal } from './SandboxCheckoutModal';
 
 export interface InlineBookingClientData {
   dni: string;
@@ -41,18 +39,18 @@ interface PublicBookingViewProps {
   user: User | null;
   selectedSlot: AppointmentSlot | null;
   onSelectSlot: (slot: AppointmentSlot | null) => void;
-  activeLock: LockSlotResponse | null;
-  onInitiateLock: (
+  activeLock?: LockSlotResponse | null;
+  onInitiateLock?: (
     slot: AppointmentSlot,
     clientData?: InlineBookingClientData,
   ) => Promise<void>;
-  onSimulateWebhook: (slotId: string) => Promise<void>;
-  onSimulateRejectedWebhook: (
+  onSimulateWebhook?: (slotId: string) => Promise<void>;
+  onSimulateRejectedWebhook?: (
     slotId: string,
   ) => Promise<{ mpPaymentId: string; reason: string }>;
-  onReleaseLock: (slotId: string) => Promise<void>;
-  isSandboxCheckoutOpen: boolean;
-  onSetSandboxCheckoutOpen: (open: boolean) => void;
+  onReleaseLock?: (slotId: string) => Promise<void>;
+  isSandboxCheckoutOpen?: boolean;
+  onSetSandboxCheckoutOpen?: (open: boolean) => void;
   onGoToClientAppointments?: () => void;
   confirmedSlotInfo: {
     slotId: string;
@@ -105,16 +103,10 @@ export function formatDateHeader(dateStr: string): {
 
 export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
   schedule,
+  onRefresh,
   user,
   selectedSlot,
   onSelectSlot,
-  activeLock,
-  onInitiateLock,
-  onSimulateWebhook,
-  onSimulateRejectedWebhook,
-  onReleaseLock,
-  isSandboxCheckoutOpen,
-  onSetSandboxCheckoutOpen,
   onGoToClientAppointments,
   confirmedSlotInfo,
   isLocking,
@@ -124,7 +116,6 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
     [schedule.dates],
   );
   const [selectedDate, setSelectedDate] = useState<string>(dateKeys[0] || '');
-  const [remainingSeconds, setRemainingSeconds] = useState<number>(0);
 
   // Modal / Bottom Sheet minimalista de confirmación (DNI, Nombre, WhatsApp)
   const [isConfirmSheetOpen, setIsConfirmSheetOpen] = useState(false);
@@ -132,6 +123,8 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
   const [confirmName, setConfirmName] = useState(user?.name || '');
   const [confirmPhone, setConfirmPhone] = useState(user?.phone || '');
   const [confirmError, setConfirmError] = useState<string | null>(null);
+  const [isConnectingMp, setIsConnectingMp] = useState(false);
+  const [toastAlert, setToastAlert] = useState<string | null>(null);
 
   useEffect(() => {
     if (user) {
@@ -148,21 +141,10 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
   }, [dateKeys, selectedDate]);
 
   useEffect(() => {
-    if (!activeLock?.slot.locked_until) {
-      setRemainingSeconds(0);
-      return;
-    }
-
-    const updateTimer = () => {
-      const expiresMs = new Date(activeLock.slot.locked_until!).getTime();
-      const diffSec = Math.max(0, Math.floor((expiresMs - Date.now()) / 1000));
-      setRemainingSeconds(diffSec);
-    };
-
-    updateTimer();
-    const interval = setInterval(updateTimer, 1000);
-    return () => clearInterval(interval);
-  }, [activeLock]);
+    if (!toastAlert) return;
+    const timer = setTimeout(() => setToastAlert(null), 6000);
+    return () => clearTimeout(timer);
+  }, [toastAlert]);
 
   const slotsForSelectedDate = useMemo(() => {
     if (!selectedDate) return [];
@@ -183,27 +165,6 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
     return { morningSlots: morning, afternoonSlots: afternoon };
   }, [slotsForSelectedDate]);
 
-  const countdownFormatted = useMemo(() => {
-    const mins = String(Math.floor(remainingSeconds / 60)).padStart(2, '0');
-    const secs = String(remainingSeconds % 60).padStart(2, '0');
-    return `${mins}:${secs}`;
-  }, [remainingSeconds]);
-
-  const handleRedirectToMercadoPago = () => {
-    if (!activeLock) return;
-    const targetUrl =
-      activeLock.payment.init_point || activeLock.payment.sandbox_init_point;
-    if (
-      targetUrl &&
-      !activeLock.payment.is_sandbox_local &&
-      targetUrl.startsWith('http')
-    ) {
-      window.location.href = targetUrl;
-      return;
-    }
-    onSetSandboxCheckoutOpen(true);
-  };
-
   const handleConfirmSheetSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedSlot) return;
@@ -223,17 +184,63 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
     }
 
     setConfirmError(null);
-    setIsConfirmSheetOpen(false);
-    await onInitiateLock(selectedSlot, {
-      dni: cleanDni,
-      name: confirmName.trim(),
-      phone: confirmPhone.trim(),
-      password: cleanDni.padStart(6, '0'),
-    });
+    setToastAlert(null);
+    setIsConnectingMp(true);
+
+    try {
+      const data = await api.createPaymentPreference({
+        slotId: selectedSlot.id,
+        clientDni: cleanDni,
+        clientName: confirmName.trim(),
+        clientPhone: confirmPhone.trim(),
+      });
+
+      if (!data?.init_point) {
+        throw new Error(
+          'No se recibió el link de pago desde Mercado Pago. Intentá nuevamente.',
+        );
+      }
+
+      // Redirección nativa inmediata en la misma ventana a Mercado Pago
+      window.location.href = data.init_point;
+    } catch (err) {
+      const message =
+        (err as Error).message ||
+        'Este horario acaba de ser tomado o no está disponible. Por favor elegí otro turno.';
+      setConfirmError(message);
+      setToastAlert(message);
+      setIsConnectingMp(false);
+      onRefresh();
+    }
   };
+
+  const isBusy = isLocking || isConnectingMp;
 
   return (
     <div className="pb-24 space-y-4 max-w-full overflow-x-hidden">
+      {/* Toast de Alerta Amigable */}
+      {toastAlert && (
+        <div
+          role="alert"
+          className="fixed top-14 left-3.5 right-3.5 sm:left-auto sm:right-6 sm:max-w-md z-50 p-3.5 rounded-xl bg-[#0F172A] border border-[#2563EB] shadow-2xl flex items-start justify-between gap-3"
+        >
+          <div className="flex items-start gap-2.5">
+            <ShieldAlert className="w-4 h-4 text-[#2563EB] shrink-0 mt-0.5" />
+            <p className="text-xs font-medium text-[#F8FAFC] leading-relaxed">
+              {toastAlert}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setToastAlert(null)}
+            aria-label="Cerrar alerta"
+            className="text-[#94A3B8] hover:text-[#F8FAFC] shrink-0"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* 1. BARRA DE SELECCIÓN DE DÍA (En Primera Pantalla Móvil sin scroll) */}
       <section className="space-y-2">
         <div className="flex items-center justify-between px-0.5">
@@ -385,48 +392,6 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
         </section>
       )}
 
-      {/* Banner compacto si hay reserva temporal pendiente de pago */}
-      {activeLock && remainingSeconds > 0 && (
-        <section className="p-4 rounded-lg bg-[#0F172A] border border-[#2563EB] space-y-3">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2.5">
-              <div className="w-9 h-9 rounded-md bg-[#2563EB]/12 border border-[#2563EB]/40 flex items-center justify-center shrink-0">
-                <Lock className="w-4 h-4 text-[#2563EB]" />
-              </div>
-              <div>
-                <span className="text-xs font-medium text-[#94A3B8]">
-                  Pendiente de pago · Expira en {countdownFormatted}
-                </span>
-                <h3 className="text-sm font-semibold text-[#F8FAFC]">
-                  Turno {formatTime30m(activeLock.slot.start_time)} a{' '}
-                  {formatTime30m(activeLock.slot.end_time)} hs
-                </h3>
-              </div>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={handleRedirectToMercadoPago}
-              className="min-h-[48px] px-4 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] text-[#F8FAFC] text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer"
-            >
-              <CreditCard className="w-4 h-4" />
-              <span>Pagar seña en Mercado Pago · $2.000</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => onSimulateWebhook(activeLock.slot.id)}
-              className="min-h-[48px] px-4 rounded-lg bg-[#090D16] border border-[#334155] hover:border-[#2563EB] text-[#F8FAFC] text-xs font-medium flex items-center justify-center gap-2 transition-colors cursor-pointer"
-            >
-              <Sparkles className="w-4 h-4 text-[#2563EB]" />
-              <span>Confirmar pago (Demo)</span>
-            </button>
-          </div>
-        </section>
-      )}
-
       {/* Banner de Éxito cuando el turno fue confirmado */}
       {confirmedSlotInfo && (
         <section className="p-4 rounded-lg bg-[#0F172A] border border-[#2563EB] space-y-3">
@@ -548,7 +513,7 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
 
               <button
                 type="button"
-                disabled={isLocking}
+                disabled={isBusy}
                 onClick={() => {
                   setConfirmError(null);
                   setIsConfirmSheetOpen(true);
@@ -556,8 +521,8 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
                 className="w-full h-[44px] px-4 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-50 text-[#F8FAFC] text-sm font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer pointer-events-auto"
               >
                 <span>
-                  {isLocking
-                    ? 'Procesando...'
+                  {isBusy
+                    ? 'Conectando con Mercado Pago...'
                     : `${formatTime30m(selectedSlot.start_time)} hs · Reservar turno · Seña $2.000`}
                 </span>
               </button>
@@ -566,13 +531,13 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
         </div>
       </div>
 
-      {/* 4. MODAL / BOTTOM-SHEET MINIMALISTA DE CONFIRMACIÓN (Solo DNI, Nombre y WhatsApp) */}
+      {/* 4. MODAL / BOTTOM-SHEET MINIMALISTA DE CONFIRMACIÓN (Solo DNI, Nombre y WhatsApp -> Redirección Real a MP) */}
       {isConfirmSheetOpen && selectedSlot && (
         <div className="fixed inset-0 z-50 h-[100dvh] flex items-end sm:items-center justify-center bg-[#090D16]/80 backdrop-blur-xs p-0 sm:p-4 pointer-events-auto">
           <div
             className="fixed inset-0 z-40"
             onClick={() => {
-              if (!isLocking) setIsConfirmSheetOpen(false);
+              if (!isBusy) setIsConfirmSheetOpen(false);
             }}
           />
 
@@ -593,7 +558,7 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
               <button
                 type="button"
                 onClick={() => setIsConfirmSheetOpen(false)}
-                disabled={isLocking}
+                disabled={isBusy}
                 aria-label="Cerrar"
                 className="w-9 h-9 rounded-lg bg-[#090D16] border border-[#1E293B] hover:border-[#334155] flex items-center justify-center text-[#94A3B8] hover:text-[#F8FAFC] cursor-pointer"
               >
@@ -602,7 +567,7 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
             </div>
 
             {confirmError && (
-              <div className="p-3 rounded-lg bg-[#090D16] border border-[#334155] flex items-center gap-2 text-xs text-[#F8FAFC]">
+              <div className="p-3 rounded-lg bg-[#090D16] border border-[#2563EB] flex items-center gap-2 text-xs text-[#F8FAFC]">
                 <ShieldAlert className="w-4 h-4 text-[#2563EB] shrink-0" />
                 <span>{confirmError}</span>
               </div>
@@ -618,6 +583,7 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
                   inputMode="numeric"
                   pattern="[0-9]*"
                   required
+                  disabled={isBusy}
                   placeholder="Ej: 40123456"
                   value={confirmDni}
                   onChange={(e) =>
@@ -634,6 +600,7 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
                 <input
                   type="text"
                   required
+                  disabled={isBusy}
                   placeholder="Tu nombre y apellido"
                   value={confirmName}
                   onChange={(e) => setConfirmName(e.target.value)}
@@ -649,6 +616,7 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
                   type="tel"
                   inputMode="tel"
                   required
+                  disabled={isBusy}
                   placeholder="Ej: 11 5566 7788"
                   value={confirmPhone}
                   onChange={(e) => setConfirmPhone(e.target.value)}
@@ -663,35 +631,25 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
 
               <button
                 type="submit"
-                disabled={isLocking}
-                className="w-full min-h-[48px] rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-50 text-[#F8FAFC] text-sm font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer pointer-events-auto"
+                disabled={isBusy}
+                className="w-full min-h-[48px] rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-60 text-[#F8FAFC] text-sm font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer pointer-events-auto"
               >
-                <CreditCard className="w-4 h-4" />
-                <span>
-                  {isLocking
-                    ? 'Redirigiendo a Mercado Pago...'
-                    : 'Ir a Mercado Pago · $2.000'}
-                </span>
+                {isBusy ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                    <span>Conectando con Mercado Pago...</span>
+                  </>
+                ) : (
+                  <>
+                    <CreditCard className="w-4 h-4 shrink-0" />
+                    <span>Reservar turno · Seña $2.000</span>
+                  </>
+                )}
               </button>
             </form>
           </div>
         </div>
       )}
-
-      {/* Checkout Mercado Pago Modal (para entorno Sandbox / Local y Desktop) */}
-      <SandboxCheckoutModal
-        isOpen={isSandboxCheckoutOpen}
-        onClose={() => onSetSandboxCheckoutOpen(false)}
-        activeLock={activeLock}
-        shopName={schedule.barber.shop_name}
-        barberSlug={schedule.barber.slug}
-        user={user}
-        remainingSeconds={remainingSeconds}
-        countdownFormatted={countdownFormatted}
-        onSimulateApproved={onSimulateWebhook}
-        onSimulateRejected={onSimulateRejectedWebhook}
-        onReleaseLock={onReleaseLock}
-      />
     </div>
   );
 };

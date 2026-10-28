@@ -36,6 +36,7 @@ let AuthService = class AuthService {
             sub: user.id,
             dni: user.dni,
             role: user.role,
+            slug: user.barber_profile?.slug || undefined,
         };
         return {
             access_token: await this.jwtService.signAsync(payload),

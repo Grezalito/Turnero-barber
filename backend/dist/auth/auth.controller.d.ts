@@ -58,4 +58,38 @@ export declare class AuthController {
             reminder_addon_active: boolean;
         } | null;
     } | null>;
+    getBarberMe(user: JwtPayloadUser): Promise<{
+        user: {
+            dni: string;
+            name: string;
+            phone: string;
+            email: string | null;
+            id: string;
+            role: import(".prisma/client").$Enums.Role;
+            created_at: Date;
+            barber_profile: {
+                slug: string;
+                shop_name: string;
+                address: string | null;
+                reminder_config: import("@prisma/client/runtime/library").JsonValue | null;
+                id: string;
+                created_at: Date;
+                updated_at: Date;
+                user_id: string;
+                reminder_addon_active: boolean;
+            } | null;
+        } | null;
+        barber: {
+            slug: string;
+            shop_name: string;
+            address: string | null;
+            reminder_config: import("@prisma/client/runtime/library").JsonValue | null;
+            id: string;
+            created_at: Date;
+            updated_at: Date;
+            user_id: string;
+            reminder_addon_active: boolean;
+        } | null;
+        slug: string | null;
+    }>;
 }

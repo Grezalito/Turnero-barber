@@ -36,6 +36,7 @@ export class AuthService {
       sub: user.id,
       dni: user.dni,
       role: user.role,
+      slug: user.barber_profile?.slug || undefined,
     };
 
     return {

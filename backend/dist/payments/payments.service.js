@@ -13,14 +13,16 @@ var __param = (this && this.__param) || function (paramIndex, decorator) {
 };
 var PaymentsService_1;
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.PaymentsService = exports.NON_REFUNDABLE_DEPOSIT_POLICY = exports.PLATFORM_DEPOSIT_ARS = void 0;
+exports.PaymentsService = exports.NON_REFUNDABLE_DEPOSIT_POLICY = exports.LOCK_DURATION_MS = exports.PLATFORM_DEPOSIT_ARS = void 0;
 const common_1 = require("@nestjs/common");
 const config_1 = require("@nestjs/config");
 const client_1 = require("@prisma/client");
+const bcrypt = require("bcrypt");
 const mail_service_1 = require("../mail/mail.service");
 const prisma_service_1 = require("../prisma/prisma.service");
 const reminder_interface_1 = require("../reminders/reminder.interface");
 exports.PLATFORM_DEPOSIT_ARS = 2000;
+exports.LOCK_DURATION_MS = 10 * 60 * 1000;
 exports.NON_REFUNDABLE_DEPOSIT_POLICY = 'Reserva garantizada: la seña de $2.000 ARS no es reembolsable ni transferible ante cancelaciones o inasistencias';
 let PaymentsService = PaymentsService_1 = class PaymentsService {
     constructor(prisma, configService, mailService, reminderProvider) {
@@ -30,13 +32,115 @@ let PaymentsService = PaymentsService_1 = class PaymentsService {
         this.reminderProvider = reminderProvider;
         this.logger = new common_1.Logger(PaymentsService_1.name);
     }
+    async createPreferenceForSlot(dto) {
+        const cleanDni = dto.clientDni.replace(/\D/g, '');
+        const now = new Date();
+        const lockedUntil = new Date(now.getTime() + exports.LOCK_DURATION_MS);
+        let clientUser = await this.prisma.user.findUnique({
+            where: { dni: cleanDni },
+        });
+        if (clientUser) {
+            clientUser = await this.prisma.user.update({
+                where: { id: clientUser.id },
+                data: {
+                    name: dto.clientName.trim() || clientUser.name,
+                    phone: dto.clientPhone.trim() || clientUser.phone,
+                },
+            });
+        }
+        else {
+            const defaultPasswordHash = await bcrypt.hash(cleanDni.padStart(6, '0'), 10);
+            clientUser = await this.prisma.user.create({
+                data: {
+                    dni: cleanDni,
+                    password: defaultPasswordHash,
+                    name: dto.clientName.trim(),
+                    phone: dto.clientPhone.trim(),
+                    role: client_1.Role.CLIENT,
+                },
+            });
+        }
+        const existingSlot = await this.prisma.appointmentSlot.findUnique({
+            where: { id: dto.slotId },
+            include: { barber: true },
+        });
+        if (existingSlot) {
+            const lockedSlot = await this.prisma.$transaction(async (tx) => {
+                const updateResult = await tx.appointmentSlot.updateMany({
+                    where: {
+                        id: dto.slotId,
+                        OR: [
+                            { status: client_1.SlotStatus.AVAILABLE },
+                            {
+                                status: client_1.SlotStatus.PENDING_PAYMENT,
+                                locked_until: { lt: now },
+                            },
+                            {
+                                status: client_1.SlotStatus.PENDING_PAYMENT,
+                                client_id: clientUser.id,
+                            },
+                        ],
+                    },
+                    data: {
+                        status: client_1.SlotStatus.PENDING_PAYMENT,
+                        client_id: clientUser.id,
+                        locked_until: lockedUntil,
+                        deposit_amount: exports.PLATFORM_DEPOSIT_ARS,
+                    },
+                });
+                if (updateResult.count === 0) {
+                    throw new common_1.ConflictException('Este horario acaba de ser reservado por otra persona. Por favor elegí otro turno disponible.');
+                }
+                return tx.appointmentSlot.findUniqueOrThrow({
+                    where: { id: dto.slotId },
+                    include: { barber: true },
+                });
+            });
+            const preference = await this.createDepositPreference({
+                slotId: lockedSlot.id,
+                shopName: lockedSlot.barber.shop_name,
+                startTime: lockedSlot.start_time,
+                clientDni: cleanDni,
+                clientName: dto.clientName.trim(),
+            });
+            await this.prisma.appointmentSlot.update({
+                where: { id: lockedSlot.id },
+                data: { mp_preference_id: preference.preference_id },
+            });
+            return {
+                init_point: preference.init_point,
+                sandbox_init_point: preference.sandbox_init_point,
+                preference_id: preference.preference_id,
+                slot_id: lockedSlot.id,
+                deposit_amount: exports.PLATFORM_DEPOSIT_ARS,
+            };
+        }
+        if (dto.slotId.startsWith('slot_')) {
+            const preference = await this.createDepositPreference({
+                slotId: dto.slotId,
+                shopName: 'Barbería',
+                startTime: now,
+                clientDni: cleanDni,
+                clientName: dto.clientName.trim(),
+            });
+            return {
+                init_point: preference.init_point,
+                sandbox_init_point: preference.sandbox_init_point,
+                preference_id: preference.preference_id,
+                slot_id: dto.slotId,
+                deposit_amount: exports.PLATFORM_DEPOSIT_ARS,
+            };
+        }
+        throw new common_1.NotFoundException('El turno seleccionado no existe.');
+    }
     async createDepositPreference(params) {
-        const mpAccessToken = this.configService.get('MP_ACCESS_TOKEN') || '';
-        const appPublicUrl = this.configService.get('FRONTEND_URL') ||
+        const mpAccessToken = (this.configService.get('MP_ACCESS_TOKEN') || '').trim();
+        const appPublicUrl = (this.configService.get('FRONTEND_URL') ||
             this.configService.get('PUBLIC_APP_URL') ||
-            'http://localhost:5173';
-        const webhookUrl = this.configService.get('MP_WEBHOOK_URL') ||
-            'http://localhost:3000/payments/webhook';
+            'http://localhost:5173').trim();
+        const webhookUrl = (this.configService.get('MP_WEBHOOK_URL') || '').trim();
+        const isHttpsFrontend = appPublicUrl.startsWith('https://');
+        const isHttpsWebhook = webhookUrl.startsWith('https://') && !webhookUrl.includes('localhost');
         const preferencePayload = {
             items: [
                 {
@@ -48,54 +152,57 @@ let PaymentsService = PaymentsService_1 = class PaymentsService {
                     unit_price: exports.PLATFORM_DEPOSIT_ARS,
                 },
             ],
+            payer: {
+                name: params.clientName || `Cliente DNI ${params.clientDni}`,
+                identification: {
+                    type: 'DNI',
+                    number: params.clientDni,
+                },
+            },
             external_reference: params.slotId,
-            notification_url: webhookUrl,
             back_urls: {
                 success: `${appPublicUrl}?payment=success&slot=${params.slotId}`,
                 failure: `${appPublicUrl}?payment=failure&slot=${params.slotId}`,
                 pending: `${appPublicUrl}?payment=pending&slot=${params.slotId}`,
             },
-            auto_return: 'approved',
+            ...(isHttpsFrontend ? { auto_return: 'approved' } : {}),
+            ...(isHttpsWebhook ? { notification_url: webhookUrl } : {}),
             statement_descriptor: 'TURNERO BARBER',
         };
         const isPlaceholderToken = !mpAccessToken ||
             mpAccessToken.includes('CENTRAL-PLATFORM-TOKEN') ||
             mpAccessToken === 'TEST-000000';
-        if (!isPlaceholderToken) {
-            try {
-                const response = await fetch('https://api.mercadopago.com/checkout/preferences', {
-                    method: 'POST',
-                    headers: {
-                        Authorization: `Bearer ${mpAccessToken}`,
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify(preferencePayload),
-                });
-                if (response.ok) {
-                    const data = (await response.json());
-                    return {
-                        preference_id: data.id,
-                        init_point: data.init_point,
-                        sandbox_init_point: data.sandbox_init_point || data.init_point,
-                        deposit_amount: exports.PLATFORM_DEPOSIT_ARS,
-                        external_reference: params.slotId,
-                        is_sandbox_local: false,
-                    };
-                }
-            }
-            catch (err) {
-                this.logger.warn(`Error conectando con API de Mercado Pago, usando preferencia local de desarrollo: ${err.message}`);
-            }
+        if (isPlaceholderToken) {
+            throw new common_1.BadGatewayException('No se configuró un MP_ACCESS_TOKEN válido de Mercado Pago en el servidor.');
         }
-        const fallbackPrefId = `pref_mp_${params.slotId.slice(0, 8)}_${Date.now()}`;
-        const checkoutUrl = `${appPublicUrl}/checkout-mp?pref_id=${fallbackPrefId}&external_reference=${params.slotId}&amount=${exports.PLATFORM_DEPOSIT_ARS}`;
+        let response;
+        try {
+            response = await fetch('https://api.mercadopago.com/checkout/preferences', {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${mpAccessToken}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(preferencePayload),
+            });
+        }
+        catch (err) {
+            this.logger.error(`Error de red conectando con Mercado Pago: ${err.message}`);
+            throw new common_1.BadGatewayException('No se pudo conectar con Mercado Pago. Intentá nuevamente en unos segundos.');
+        }
+        if (!response.ok) {
+            const errorText = await response.text().catch(() => '');
+            this.logger.error(`Mercado Pago rechazó la creación de preferencia (${response.status}): ${errorText}`);
+            throw new common_1.BadGatewayException('Mercado Pago no pudo generar el link de pago en este momento.');
+        }
+        const data = (await response.json());
         return {
-            preference_id: fallbackPrefId,
-            init_point: checkoutUrl,
-            sandbox_init_point: checkoutUrl,
+            preference_id: data.id,
+            init_point: data.init_point,
+            sandbox_init_point: data.sandbox_init_point || data.init_point,
             deposit_amount: exports.PLATFORM_DEPOSIT_ARS,
             external_reference: params.slotId,
-            is_sandbox_local: true,
+            is_sandbox_local: false,
         };
     }
     async handleWebhook(dto, query) {
