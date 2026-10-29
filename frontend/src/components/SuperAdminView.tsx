@@ -11,6 +11,17 @@ import {
 } from 'lucide-react';
 import { AdminBarberItem, WeeklySettlementItem } from '../types/api';
 
+export function generateSlugFromShopName(rawText: string): string {
+  return rawText
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9\s-]/g, '')
+    .replace(/[\s_-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
 export interface SuperAdminViewProps {
   barbers: AdminBarberItem[];
   settlements: WeeklySettlementItem[];
@@ -19,8 +30,9 @@ export interface SuperAdminViewProps {
     password: string;
     name: string;
     phone: string;
-    slug: string;
+    shopName: string;
     shop_name: string;
+    slug?: string;
     address?: string;
   }) => Promise<void>;
   onToggleReminder: (barberId: string, active: boolean) => Promise<void>;
@@ -39,7 +51,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
   onMarkSettlementTransferred,
 }) => {
   const [activeTab, setActiveTab] = useState<'LIQUIDACIONES' | 'BARBERIAS'>(
-    'LIQUIDACIONES',
+    'BARBERIAS',
   );
   const [weekFilter, setWeekFilter] = useState<'ALL' | 'CURRENT' | 'PREVIOUS'>(
     'ALL',
@@ -52,9 +64,11 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
   const [phone, setPhone] = useState('');
   const [shopName, setShopName] = useState('');
   const [slug, setSlug] = useState('');
+  const [slugManuallyEdited, setSlugManuallyEdited] = useState(false);
   const [address, setAddress] = useState('');
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   const totalConfirmedSlots = barbers.reduce(
     (acc, b) => acc + b.confirmed_appointments_count,
@@ -86,23 +100,40 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setSuccessMsg(null);
+    const cleanDni = dni.replace(/\D/g, '');
+    const cleanShopName = shopName.trim();
+    if (!cleanShopName) {
+      setError('El nombre de la barbería es obligatorio.');
+      return;
+    }
+
+    const dynamicSlug = slug.trim()
+      ? generateSlugFromShopName(slug)
+      : generateSlugFromShopName(cleanShopName);
+
     setCreating(true);
     try {
       await onCreateBarber({
-        dni: dni.replace(/\D/g, ''),
+        dni: cleanDni,
         password,
-        name,
-        phone,
-        slug: slug.toLowerCase().trim(),
-        shop_name: shopName.trim(),
+        name: name.trim(),
+        phone: phone.trim(),
+        shopName: cleanShopName,
+        shop_name: cleanShopName,
+        slug: dynamicSlug || undefined,
         address: address.trim() || undefined,
       });
+      setSuccessMsg(
+        `Barbería "${cleanShopName}" creada correctamente con link público /${dynamicSlug}`,
+      );
       setDni('');
       setPassword('');
       setName('');
       setPhone('');
       setShopName('');
       setSlug('');
+      setSlugManuallyEdited(false);
       setAddress('');
     } catch (err) {
       setError((err as Error).message);
@@ -390,8 +421,14 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
             </div>
 
             {error && (
-              <div className="p-3 rounded-sm bg-[#090D16] border border-[#1D4ED8] font-mono-code text-xs text-[#1D4ED8]">
+              <div className="p-3 rounded-sm bg-[#0A0A0B] border border-[#C85A32] font-mono-code text-xs text-[#F2EFE9]">
                 {error}
+              </div>
+            )}
+
+            {successMsg && (
+              <div className="p-3 rounded-sm bg-[#0A0A0B] border border-[#D49A2A] font-mono-code text-xs text-[#D49A2A]">
+                {successMsg}
               </div>
             )}
 
@@ -401,7 +438,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
             >
               <div>
                 <label className="block text-[10px] font-display uppercase tracking-wider text-[#94A3B8] mb-1">
-                  DNI BARBERO
+                  DNI BARBERO *
                 </label>
                 <input
                   type="text"
@@ -416,7 +453,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
 
               <div>
                 <label className="block text-[10px] font-display uppercase tracking-wider text-[#94A3B8] mb-1">
-                  CONTRASEÑA INICIAL
+                  CONTRASEÑA INICIAL *
                 </label>
                 <input
                   type="password"
@@ -431,7 +468,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
 
               <div>
                 <label className="block text-[10px] font-display uppercase tracking-wider text-[#94A3B8] mb-1">
-                  NOMBRE DEL BARBERO
+                  NOMBRE DEL BARBERO *
                 </label>
                 <input
                   type="text"
@@ -445,7 +482,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
 
               <div>
                 <label className="block text-[10px] font-display uppercase tracking-wider text-[#94A3B8] mb-1">
-                  WHATSAPP
+                  WHATSAPP *
                 </label>
                 <input
                   type="tel"
@@ -459,22 +496,19 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
 
               <div>
                 <label className="block text-[10px] font-display uppercase tracking-wider text-[#94A3B8] mb-1">
-                  NOMBRE DE LA BARBERÍA
+                  NOMBRE DE LA BARBERÍA (shopName) *
                 </label>
                 <input
                   type="text"
+                  name="shopName"
                   required
-                  placeholder="Navaja Negra Studio"
+                  placeholder="Ej: Mi Barbería"
                   value={shopName}
                   onChange={(e) => {
-                    setShopName(e.target.value);
-                    if (!slug) {
-                      setSlug(
-                        e.target.value
-                          .toLowerCase()
-                          .replace(/[^a-z0-9]+/g, '-')
-                          .replace(/(^-|-$)/g, ''),
-                      );
+                    const nextVal = e.target.value;
+                    setShopName(nextVal);
+                    if (!slugManuallyEdited) {
+                      setSlug(generateSlugFromShopName(nextVal));
                     }
                   }}
                   className="w-full min-h-[42px] px-3 rounded-sm bg-[#090D16] border border-[#1E293B] text-xs text-[#F8FAFC]"
@@ -483,15 +517,18 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
 
               <div>
                 <label className="block text-[10px] font-display uppercase tracking-wider text-[#94A3B8] mb-1">
-                  SLUG PÚBLICO (URL)
+                  SLUG PÚBLICO GENERADO (URL)
                 </label>
                 <input
                   type="text"
-                  required
-                  placeholder="navaja-negra"
+                  placeholder="mi-barberia"
                   value={slug}
-                  onChange={(e) => setSlug(e.target.value)}
-                  className="w-full min-h-[42px] px-3 rounded-sm bg-[#090D16] border border-[#1E293B] font-mono-code text-xs text-[#2563EB]"
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setSlugManuallyEdited(val.trim().length > 0);
+                    setSlug(generateSlugFromShopName(val));
+                  }}
+                  className="w-full min-h-[42px] px-3 rounded-sm bg-[#090D16] border border-[#1E293B] font-mono-code text-xs text-[#D49A2A]"
                 />
               </div>
 

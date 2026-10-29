@@ -267,7 +267,11 @@ function resolveSlugFromPathname(pathname: string): string | null {
 export const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(() => getStoredUser());
   const [slug, setSlug] = useState<string>(() => {
-    return resolveSlugFromPathname(window.location.pathname) || 'obsidian-studio';
+    const pathSlug = resolveSlugFromPathname(window.location.pathname);
+    if (pathSlug) return pathSlug;
+    const stored = getStoredUser();
+    if (stored?.barber_profile?.slug) return stored.barber_profile.slug;
+    return 'obsidian-studio';
   });
   const [activeView, setActiveView] = useState<ActiveView>(() => {
     const pathSlug = resolveSlugFromPathname(window.location.pathname);
@@ -322,12 +326,24 @@ export const App: React.FC = () => {
     shop_name: string;
     address?: string | null;
     reminder_addon_active: boolean;
-  }>({
-    id: 'barber_demo_1',
-    slug: 'obsidian-studio',
-    shop_name: 'OBSIDIAN & RAW BRASS STUDIO',
-    address: 'Thames 1840, Palermo Soho',
-    reminder_addon_active: true,
+  }>(() => {
+    const stored = getStoredUser();
+    if (stored?.barber_profile) {
+      return {
+        id: stored.barber_profile.id,
+        slug: stored.barber_profile.slug,
+        shop_name: stored.barber_profile.shop_name,
+        address: stored.barber_profile.address,
+        reminder_addon_active: stored.barber_profile.reminder_addon_active,
+      };
+    }
+    return {
+      id: 'barber_demo_1',
+      slug: 'obsidian-studio',
+      shop_name: 'OBSIDIAN & RAW BRASS STUDIO',
+      address: 'Thames 1840, Palermo Soho',
+      reminder_addon_active: true,
+    };
   });
 
   // SuperAdmin state
@@ -560,6 +576,17 @@ export const App: React.FC = () => {
     try {
       const res = await api.login(dni, password);
       setUser(res.user);
+      if (res.user.barber_profile) {
+        setBarberInfo({
+          id: res.user.barber_profile.id,
+          slug: res.user.barber_profile.slug,
+          shop_name: res.user.barber_profile.shop_name,
+          address: res.user.barber_profile.address,
+          reminder_addon_active: res.user.barber_profile.reminder_addon_active,
+        });
+        setSlug(res.user.barber_profile.slug);
+        setBarberSlots([]);
+      }
       if (pendingSlotForAuth) {
         const slotToLock = pendingSlotForAuth;
         setPendingSlotForAuth(null);
@@ -570,7 +597,11 @@ export const App: React.FC = () => {
       } else if (res.user.role === 'BARBER') {
         setActiveView('BARBER_PANEL');
       }
-    } catch {
+    } catch (err) {
+      const msg = (err as Error).message || '';
+      if (msg.includes('DNI o contraseña') || msg.includes('Error HTTP')) {
+        throw err;
+      }
       const role =
         dni === '00000000'
           ? 'SUPERADMIN'
@@ -969,13 +1000,30 @@ export const App: React.FC = () => {
             settlements={adminSettlements}
             onCreateBarber={async (payload) => {
               try {
-                await api.createAdminBarber(payload);
+                const created = await api.createAdminBarber(payload);
                 await loadAdminBarbers();
-              } catch {
+                if (created?.slug) {
+                  setSlug(created.slug);
+                }
+              } catch (err) {
+                const msg = (err as Error).message || '';
+                if (!msg.toLowerCase().includes('failed to fetch')) {
+                  throw err;
+                }
+                const generatedSlug =
+                  payload.slug ||
+                  payload.shopName
+                    .normalize('NFD')
+                    .replace(/[\u0300-\u036f]/g, '')
+                    .toLowerCase()
+                    .trim()
+                    .replace(/[^a-z0-9\s-]/g, '')
+                    .replace(/[\s_-]+/g, '-')
+                    .replace(/^-+|-+$/g, '');
                 const newItem: AdminBarberItem = {
                   id: `barber_${Date.now()}`,
-                  slug: payload.slug,
-                  shop_name: payload.shop_name,
+                  slug: generatedSlug,
+                  shop_name: payload.shopName || payload.shop_name,
                   address: payload.address,
                   reminder_addon_active: false,
                   confirmed_appointments_count: 0,

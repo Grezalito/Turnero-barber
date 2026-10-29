@@ -32,32 +32,34 @@ __decorate([
 ], CreateBarberDto.prototype, "password", void 0);
 __decorate([
     (0, class_validator_1.IsString)(),
-    (0, class_validator_1.IsNotEmpty)(),
+    (0, class_validator_1.IsNotEmpty)({ message: 'El nombre del barbero es obligatorio' }),
     __metadata("design:type", String)
 ], CreateBarberDto.prototype, "name", void 0);
 __decorate([
     (0, class_validator_1.IsString)(),
-    (0, class_validator_1.IsNotEmpty)(),
+    (0, class_validator_1.IsNotEmpty)({ message: 'El teléfono del barbero es obligatorio' }),
     __metadata("design:type", String)
 ], CreateBarberDto.prototype, "phone", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsOptional)(),
+    __metadata("design:type", String)
+], CreateBarberDto.prototype, "shopName", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsOptional)(),
+    __metadata("design:type", String)
+], CreateBarberDto.prototype, "shop_name", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsOptional)(),
+    __metadata("design:type", String)
+], CreateBarberDto.prototype, "slug", void 0);
 __decorate([
     (0, class_validator_1.IsEmail)({}, { message: 'El formato del email no es válido' }),
     (0, class_validator_1.IsOptional)(),
     __metadata("design:type", String)
 ], CreateBarberDto.prototype, "email", void 0);
-__decorate([
-    (0, class_validator_1.IsString)(),
-    (0, class_validator_1.IsNotEmpty)(),
-    (0, class_validator_1.Matches)(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, {
-        message: 'El slug solo puede contener letras minúsculas, números y guiones medios (ej: barberia-don-juan)',
-    }),
-    __metadata("design:type", String)
-], CreateBarberDto.prototype, "slug", void 0);
-__decorate([
-    (0, class_validator_1.IsString)(),
-    (0, class_validator_1.IsNotEmpty)(),
-    __metadata("design:type", String)
-], CreateBarberDto.prototype, "shop_name", void 0);
 __decorate([
     (0, class_validator_1.IsString)(),
     (0, class_validator_1.IsOptional)(),

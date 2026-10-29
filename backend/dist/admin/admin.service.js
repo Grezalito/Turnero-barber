@@ -10,63 +10,138 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AdminService = void 0;
+exports.generateSlug = generateSlug;
 const common_1 = require("@nestjs/common");
 const client_1 = require("@prisma/client");
 const bcrypt = require("bcrypt");
 const weekly_bonus_util_1 = require("../appointments/weekly-bonus.util");
 const prisma_service_1 = require("../prisma/prisma.service");
+function generateSlug(rawText) {
+    return rawText
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .trim()
+        .replace(/[^a-z0-9\s-]/g, '')
+        .replace(/[\s_-]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+}
 let AdminService = class AdminService {
     constructor(prisma) {
         this.prisma = prisma;
     }
+    async ensureUniqueSlug(rawSource) {
+        const baseSlug = generateSlug(rawSource) ||
+            `barberia-${Math.floor(1000 + Math.random() * 9000)}`;
+        const existing = await this.prisma.barberProfile.findUnique({
+            where: { slug: baseSlug },
+        });
+        if (!existing) {
+            return baseSlug;
+        }
+        for (let attempt = 0; attempt < 15; attempt++) {
+            const randomSuffix = Math.floor(100 + Math.random() * 900);
+            const candidate = `${baseSlug}-${randomSuffix}`;
+            const taken = await this.prisma.barberProfile.findUnique({
+                where: { slug: candidate },
+            });
+            if (!taken) {
+                return candidate;
+            }
+        }
+        return `${baseSlug}-${Date.now().toString().slice(-4)}`;
+    }
     async createBarber(dto) {
-        const [existingDni, existingSlug] = await Promise.all([
-            this.prisma.user.findUnique({ where: { dni: dto.dni } }),
-            this.prisma.barberProfile.findUnique({ where: { slug: dto.slug } }),
-        ]);
-        if (existingDni) {
-            throw new common_1.ConflictException(`Ya existe un usuario con el DNI ${dto.dni}`);
+        const cleanDni = dto.dni.replace(/\D/g, '');
+        const resolvedShopName = (dto.shopName || dto.shop_name || '').trim();
+        if (!resolvedShopName) {
+            throw new common_1.BadRequestException('El nombre de la barbería (shopName) es obligatorio');
         }
-        if (existingSlug) {
-            throw new common_1.ConflictException(`El slug público "${dto.slug}" ya está en uso por otro barbero`);
+        const existingDni = await this.prisma.user.findUnique({
+            where: { dni: cleanDni },
+            include: { barber_profile: true },
+        });
+        if (existingDni && existingDni.barber_profile) {
+            throw new common_1.ConflictException(`Ya existe un barbero registrado con el DNI ${cleanDni}`);
         }
+        const uniqueSlug = await this.ensureUniqueSlug(dto.slug?.trim() || resolvedShopName);
         const hashedPassword = await bcrypt.hash(dto.password, 10);
-        return this.prisma.$transaction(async (tx) => {
-            const user = await tx.user.create({
+        if (existingDni && !existingDni.barber_profile) {
+            const updatedUser = await this.prisma.user.update({
+                where: { id: existingDni.id },
                 data: {
-                    dni: dto.dni,
+                    name: dto.name.trim(),
+                    phone: dto.phone.trim(),
+                    email: dto.email?.trim() || existingDni.email || null,
                     password: hashedPassword,
-                    name: dto.name,
-                    phone: dto.phone,
-                    email: dto.email || null,
                     role: client_1.Role.BARBER,
+                    barber_profile: {
+                        create: {
+                            shop_name: resolvedShopName,
+                            slug: uniqueSlug,
+                            address: dto.address?.trim() || null,
+                            reminder_addon_active: false,
+                        },
+                    },
+                },
+                include: {
+                    barber_profile: true,
                 },
             });
-            const barberProfile = await tx.barberProfile.create({
-                data: {
-                    user_id: user.id,
-                    slug: dto.slug,
-                    shop_name: dto.shop_name,
-                    address: dto.address,
-                    reminder_addon_active: false,
-                },
-            });
+            const bp = updatedUser.barber_profile;
             return {
-                id: barberProfile.id,
-                slug: barberProfile.slug,
-                shop_name: barberProfile.shop_name,
-                address: barberProfile.address,
-                reminder_addon_active: barberProfile.reminder_addon_active,
+                id: bp.id,
+                slug: bp.slug,
+                shop_name: bp.shop_name,
+                address: bp.address,
+                reminder_addon_active: bp.reminder_addon_active,
                 user: {
-                    id: user.id,
-                    dni: user.dni,
-                    name: user.name,
-                    phone: user.phone,
-                    email: user.email,
-                    role: user.role,
+                    id: updatedUser.id,
+                    dni: updatedUser.dni,
+                    name: updatedUser.name,
+                    phone: updatedUser.phone,
+                    email: updatedUser.email,
+                    role: updatedUser.role,
                 },
             };
+        }
+        const createdUser = await this.prisma.user.create({
+            data: {
+                name: dto.name.trim(),
+                dni: cleanDni,
+                phone: dto.phone.trim(),
+                email: dto.email?.trim() || null,
+                password: hashedPassword,
+                role: client_1.Role.BARBER,
+                barber_profile: {
+                    create: {
+                        shop_name: resolvedShopName,
+                        slug: uniqueSlug,
+                        address: dto.address?.trim() || null,
+                        reminder_addon_active: false,
+                    },
+                },
+            },
+            include: {
+                barber_profile: true,
+            },
         });
+        const barberProfile = createdUser.barber_profile;
+        return {
+            id: barberProfile.id,
+            slug: barberProfile.slug,
+            shop_name: barberProfile.shop_name,
+            address: barberProfile.address,
+            reminder_addon_active: barberProfile.reminder_addon_active,
+            user: {
+                id: createdUser.id,
+                dni: createdUser.dni,
+                name: createdUser.name,
+                phone: createdUser.phone,
+                email: createdUser.email,
+                role: createdUser.role,
+            },
+        };
     }
     async toggleReminderAddon(barberId, dto) {
         const barber = await this.prisma.barberProfile.findUnique({
@@ -102,6 +177,24 @@ let AdminService = class AdminService {
         };
     }
     async listBarbers() {
+        const orphanBarbers = await this.prisma.user.findMany({
+            where: {
+                role: client_1.Role.BARBER,
+                barber_profile: { is: null },
+            },
+        });
+        for (const orphan of orphanBarbers) {
+            const fallbackShopName = `Barbería ${orphan.name}`;
+            const uniqueSlug = await this.ensureUniqueSlug(fallbackShopName);
+            await this.prisma.barberProfile.create({
+                data: {
+                    user_id: orphan.id,
+                    shop_name: fallbackShopName,
+                    slug: uniqueSlug,
+                    reminder_addon_active: false,
+                },
+            });
+        }
         const barbers = await this.prisma.barberProfile.findMany({
             include: {
                 user: {

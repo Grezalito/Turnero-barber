@@ -33,4 +33,20 @@ export class RegisterClientDto {
   @IsEmail({}, { message: 'El formato del email no es válido' })
   @IsOptional()
   email?: string;
+
+  @IsString()
+  @IsOptional()
+  shopName?: string;
+
+  @IsString()
+  @IsOptional()
+  shop_name?: string;
+
+  @IsString()
+  @IsOptional()
+  slug?: string;
+
+  @IsString()
+  @IsOptional()
+  address?: string;
 }

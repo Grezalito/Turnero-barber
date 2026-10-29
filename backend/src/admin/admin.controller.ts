@@ -15,7 +15,7 @@ import { AdminService } from './admin.service';
 import { CreateBarberDto } from './dto/create-barber.dto';
 import { ToggleReminderDto } from './dto/toggle-reminder.dto';
 
-@Controller('admin')
+@Controller(['admin', ''])
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(Role.SUPERADMIN)
 export class AdminController {

@@ -15,15 +15,15 @@ export declare class AuthController {
             email: string | null;
             role: import(".prisma/client").$Enums.Role;
             barber_profile: {
-                slug: string;
                 shop_name: string;
+                slug: string;
                 address: string | null;
                 reminder_config: import("@prisma/client/runtime/library").JsonValue | null;
                 id: string;
-                created_at: Date;
-                updated_at: Date;
                 user_id: string;
                 reminder_addon_active: boolean;
+                created_at: Date;
+                updated_at: Date;
             } | null;
         };
     }>;
@@ -36,6 +36,28 @@ export declare class AuthController {
             phone: string;
             email: string | null;
             role: import(".prisma/client").$Enums.Role;
+            barber_profile: {
+                shop_name: string;
+                slug: string;
+                address: string | null;
+                reminder_config: import("@prisma/client/runtime/library").JsonValue | null;
+                id: string;
+                user_id: string;
+                reminder_addon_active: boolean;
+                created_at: Date;
+                updated_at: Date;
+            } | null;
+        };
+    } | {
+        access_token: string;
+        user: {
+            id: string;
+            dni: string;
+            name: string;
+            phone: string;
+            email: string | null;
+            role: import(".prisma/client").$Enums.Role;
+            barber_profile?: undefined;
         };
     }>;
     getMe(user: JwtPayloadUser): Promise<{
@@ -44,18 +66,18 @@ export declare class AuthController {
         phone: string;
         email: string | null;
         id: string;
-        role: import(".prisma/client").$Enums.Role;
         created_at: Date;
+        role: import(".prisma/client").$Enums.Role;
         barber_profile: {
-            slug: string;
             shop_name: string;
+            slug: string;
             address: string | null;
             reminder_config: import("@prisma/client/runtime/library").JsonValue | null;
             id: string;
-            created_at: Date;
-            updated_at: Date;
             user_id: string;
             reminder_addon_active: boolean;
+            created_at: Date;
+            updated_at: Date;
         } | null;
     } | null>;
     getBarberMe(user: JwtPayloadUser): Promise<{
@@ -65,30 +87,30 @@ export declare class AuthController {
             phone: string;
             email: string | null;
             id: string;
-            role: import(".prisma/client").$Enums.Role;
             created_at: Date;
+            role: import(".prisma/client").$Enums.Role;
             barber_profile: {
-                slug: string;
                 shop_name: string;
+                slug: string;
                 address: string | null;
                 reminder_config: import("@prisma/client/runtime/library").JsonValue | null;
                 id: string;
-                created_at: Date;
-                updated_at: Date;
                 user_id: string;
                 reminder_addon_active: boolean;
+                created_at: Date;
+                updated_at: Date;
             } | null;
         } | null;
         barber: {
-            slug: string;
             shop_name: string;
+            slug: string;
             address: string | null;
             reminder_config: import("@prisma/client/runtime/library").JsonValue | null;
             id: string;
-            created_at: Date;
-            updated_at: Date;
             user_id: string;
             reminder_addon_active: boolean;
+            created_at: Date;
+            updated_at: Date;
         } | null;
         slug: string | null;
     }>;

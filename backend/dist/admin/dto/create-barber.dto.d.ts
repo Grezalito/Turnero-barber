@@ -3,8 +3,9 @@ export declare class CreateBarberDto {
     password: string;
     name: string;
     phone: string;
+    shopName?: string;
+    shop_name?: string;
+    slug?: string;
     email?: string;
-    slug: string;
-    shop_name: string;
     address?: string;
 }

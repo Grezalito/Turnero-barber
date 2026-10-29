@@ -315,13 +315,23 @@ export const api = {
     password: string;
     name: string;
     phone: string;
-    slug: string;
-    shop_name: string;
+    shopName: string;
+    shop_name?: string;
+    slug?: string;
     address?: string;
   }) {
-    return request('/admin/barbers', {
+    return request<AdminBarberItem>('/admin/barbers', {
       method: 'POST',
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        name: payload.name,
+        dni: payload.dni,
+        phone: payload.phone,
+        password: payload.password,
+        shopName: payload.shopName,
+        shop_name: payload.shop_name || payload.shopName,
+        ...(payload.slug ? { slug: payload.slug } : {}),
+        ...(payload.address ? { address: payload.address } : {}),
+      }),
     });
   },
 

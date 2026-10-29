@@ -2,9 +2,11 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateBarberDto } from './dto/create-barber.dto';
 import { ToggleReminderDto } from './dto/toggle-reminder.dto';
+export declare function generateSlug(rawText: string): string;
 export declare class AdminService {
     private readonly prisma;
     constructor(prisma: PrismaService);
+    private ensureUniqueSlug;
     createBarber(dto: CreateBarberDto): Promise<{
         id: string;
         slug: string;

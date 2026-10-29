@@ -23,28 +23,28 @@ export class CreateBarberDto {
   password: string;
 
   @IsString()
-  @IsNotEmpty()
+  @IsNotEmpty({ message: 'El nombre del barbero es obligatorio' })
   name: string;
 
   @IsString()
-  @IsNotEmpty()
+  @IsNotEmpty({ message: 'El teléfono del barbero es obligatorio' })
   phone: string;
+
+  @IsString()
+  @IsOptional()
+  shopName?: string;
+
+  @IsString()
+  @IsOptional()
+  shop_name?: string;
+
+  @IsString()
+  @IsOptional()
+  slug?: string;
 
   @IsEmail({}, { message: 'El formato del email no es válido' })
   @IsOptional()
   email?: string;
-
-  @IsString()
-  @IsNotEmpty()
-  @Matches(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, {
-    message:
-      'El slug solo puede contener letras minúsculas, números y guiones medios (ej: barberia-don-juan)',
-  })
-  slug: string;
-
-  @IsString()
-  @IsNotEmpty()
-  shop_name: string;
 
   @IsString()
   @IsOptional()

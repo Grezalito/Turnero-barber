@@ -130,18 +130,20 @@ export const BarberDashboardView: React.FC<BarberDashboardViewProps> = ({
   const [isScheduleConfigOpen, setIsScheduleConfigOpen] =
     useState<boolean>(false);
 
-  // Slug del barbero obtenido de contexto de autenticación, GET /barbers/me o perfil
+  // Slug del barbero obtenido dinámicamente de contexto de autenticación, GET /barbers/me o perfil
   const [resolvedSlug, setResolvedSlug] = useState<string>(
-    () => getSlugFromAuthContext() || barberInfo.slug || 'obsidian-studio',
+    () => barberInfo.slug || getSlugFromAuthContext() || '',
   );
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
 
   useEffect(() => {
-    const authSlug = getSlugFromAuthContext();
-    if (authSlug) {
-      setResolvedSlug(authSlug);
-    } else if (barberInfo.slug) {
+    if (barberInfo.slug) {
       setResolvedSlug(barberInfo.slug);
+    } else {
+      const authSlug = getSlugFromAuthContext();
+      if (authSlug) {
+        setResolvedSlug(authSlug);
+      }
     }
 
     api
@@ -156,7 +158,7 @@ export const BarberDashboardView: React.FC<BarberDashboardViewProps> = ({
       });
   }, [barberInfo.slug]);
 
-  const barberSlug = resolvedSlug || barberInfo.slug || 'obsidian-studio';
+  const barberSlug = resolvedSlug || barberInfo.slug || getSlugFromAuthContext() || '';
   const shareableBookingUrl =
     typeof window !== 'undefined'
       ? `${window.location.origin}/${barberSlug}`

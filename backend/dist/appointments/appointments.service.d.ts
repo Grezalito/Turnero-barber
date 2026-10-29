@@ -101,8 +101,8 @@ export declare class AppointmentsService {
                     name: string;
                     phone: string;
                 };
-                slug: string;
                 shop_name: string;
+                slug: string;
                 address: string | null;
                 id: string;
                 reminder_addon_active: boolean;
