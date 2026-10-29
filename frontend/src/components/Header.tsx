@@ -4,8 +4,8 @@ import {
   ShieldCheck,
   Calendar,
   Eye,
-  TicketCheck,
-  SlidersHorizontal,
+  KeyRound,
+  LogOut,
 } from 'lucide-react';
 import { User } from '../types/api';
 
@@ -20,10 +20,10 @@ interface HeaderProps {
   activeView: ActiveView;
   onChangeView: (view: ActiveView) => void;
   onOpenAuthSheet: () => void;
+  onLogout?: () => void;
   currentSlug?: string;
   shopName?: string;
   availableCount?: number;
-  clientConfirmedCount?: number;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -31,57 +31,36 @@ export const Header: React.FC<HeaderProps> = ({
   activeView,
   onChangeView,
   onOpenAuthSheet,
+  onLogout,
   shopName = 'Obsidian Barber Studio',
   availableCount = 12,
-  clientConfirmedCount = 0,
 }) => {
   return (
-    <header className="fixed top-0 left-0 right-0 z-40 h-12 max-h-[48px] bg-[#090D16]/95 backdrop-blur-md border-b border-[#1E293B]">
+    <header className="fixed top-0 left-0 right-0 z-40 h-12 max-h-[48px] bg-[#0A0A0B]/95 backdrop-blur-md border-b border-[#242428]">
       <div className="max-w-3xl mx-auto h-full px-3 sm:px-4 flex items-center justify-between gap-2 overflow-hidden">
         {/* Left: Avatar chico de la barbería + Nombre */}
         <button
           type="button"
           onClick={() => onChangeView('PUBLIC_BOOKING')}
-          className="h-9 flex items-center gap-2.5 text-left focus:outline-none min-w-0"
+          className="h-9 flex items-center gap-2.5 text-left focus:outline-none min-w-0 cursor-pointer"
         >
-          <div className="w-8 h-8 rounded-md bg-[#0F172A] border border-[#1E293B] flex items-center justify-center shrink-0">
-            <Scissors className="w-4 h-4 text-[#2563EB]" />
+          <div className="w-8 h-8 rounded-sm bg-[#121214] border border-[#242428] flex items-center justify-center shrink-0">
+            <Scissors className="w-4 h-4 text-[#D49A2A]" />
           </div>
-          <span className="text-sm font-semibold text-[#F8FAFC] truncate">
+          <span className="font-display text-sm font-bold uppercase tracking-wide text-[#F2EFE9] truncate">
             {shopName}
           </span>
         </button>
 
-        {/* Right: Estado de Turnos Disponibles + Navegación de Rol si aplica (sin botones/textos de login/registro visibles) */}
+        {/* Right: Estado de Turnos Disponibles + Acceso Barberos / Controles Staff */}
         <div className="flex items-center gap-2 shrink-0">
           {activeView === 'PUBLIC_BOOKING' && (
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#2563EB]/12 border border-[#2563EB]/30 text-[11px] font-medium text-[#F8FAFC]">
-              <span className="w-1.5 h-1.5 rounded-full bg-[#2563EB]" />
+            <span className="hidden xs:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-sm bg-[#121214] border border-[#242428] font-mono-code text-[11px] font-medium text-[#F2EFE9]">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#D49A2A]" />
               <span>
                 {availableCount > 0 ? 'Turnos disponibles' : 'Sin cupos hoy'}
               </span>
             </span>
-          )}
-
-          {user?.role === 'CLIENT' && clientConfirmedCount > 0 && (
-            <button
-              type="button"
-              onClick={() =>
-                onChangeView(
-                  activeView === 'CLIENT_APPOINTMENTS'
-                    ? 'PUBLIC_BOOKING'
-                    : 'CLIENT_APPOINTMENTS',
-                )
-              }
-              className={`h-8 px-2.5 rounded-md border text-xs font-medium flex items-center gap-1.5 transition-colors ${
-                activeView === 'CLIENT_APPOINTMENTS'
-                  ? 'bg-[#2563EB] text-[#F8FAFC] border-[#2563EB]'
-                  : 'bg-[#0F172A] text-[#F8FAFC] border-[#1E293B] hover:border-[#334155]'
-              }`}
-            >
-              <TicketCheck className="w-3.5 h-3.5 shrink-0" />
-              <span>Mis turnos ({clientConfirmedCount})</span>
-            </button>
           )}
 
           {user?.role === 'BARBER' && (
@@ -94,16 +73,16 @@ export const Header: React.FC<HeaderProps> = ({
                     : 'BARBER_PANEL',
                 )
               }
-              className="h-8 px-2.5 rounded-md border border-[#1E293B] hover:border-[#334155] bg-[#0F172A] text-[#F8FAFC] text-xs font-medium flex items-center gap-1.5 transition-colors"
+              className="h-8 px-2.5 rounded-sm border border-[#242428] hover:border-[#D49A2A] bg-[#121214] text-[#F2EFE9] font-display text-[11px] uppercase font-bold tracking-wider flex items-center gap-1.5 transition-colors cursor-pointer"
             >
               {activeView === 'BARBER_PANEL' ? (
                 <>
-                  <Eye className="w-3.5 h-3.5 text-[#2563EB]" />
+                  <Eye className="w-3.5 h-3.5 text-[#D49A2A]" />
                   <span>Vista pública</span>
                 </>
               ) : (
                 <>
-                  <Calendar className="w-3.5 h-3.5 text-[#2563EB]" />
+                  <Calendar className="w-3.5 h-3.5 text-[#D49A2A]" />
                   <span>Agenda barbero</span>
                 </>
               )}
@@ -120,31 +99,44 @@ export const Header: React.FC<HeaderProps> = ({
                     : 'SUPERADMIN_PANEL',
                 )
               }
-              className="h-8 px-2.5 rounded-md border border-[#1E293B] hover:border-[#334155] bg-[#0F172A] text-[#F8FAFC] text-xs font-medium flex items-center gap-1.5 transition-colors"
+              className="h-8 px-2.5 rounded-sm border border-[#242428] hover:border-[#D49A2A] bg-[#121214] text-[#F2EFE9] font-display text-[11px] uppercase font-bold tracking-wider flex items-center gap-1.5 transition-colors cursor-pointer"
             >
               {activeView === 'SUPERADMIN_PANEL' ? (
                 <>
-                  <Eye className="w-3.5 h-3.5 text-[#2563EB]" />
+                  <Eye className="w-3.5 h-3.5 text-[#D49A2A]" />
                   <span>Vista pública</span>
                 </>
               ) : (
                 <>
-                  <ShieldCheck className="w-3.5 h-3.5 text-[#2563EB]" />
-                  <span>Admin</span>
+                  <ShieldCheck className="w-3.5 h-3.5 text-[#D49A2A]" />
+                  <span>Panel Admin</span>
                 </>
               )}
             </button>
           )}
 
-          {/* Acceso discreto solo por ícono para cambio de vista barbero/admin en pruebas */}
-          <button
-            type="button"
-            onClick={onOpenAuthSheet}
-            aria-label="Opciones de barbería"
-            className="w-8 h-8 rounded-md bg-[#0F172A] border border-[#1E293B] hover:border-[#334155] flex items-center justify-center text-[#94A3B8] hover:text-[#F8FAFC] transition-colors"
-          >
-            <SlidersHorizontal className="w-3.5 h-3.5" />
-          </button>
+          {user ? (
+            <button
+              type="button"
+              onClick={onLogout}
+              title="Cerrar Sesión"
+              aria-label="Cerrar Sesión"
+              className="h-8 px-2.5 rounded-sm bg-[#121214] border border-[#C85A32] hover:bg-[#C85A32]/15 text-[#F2EFE9] font-display text-[11px] uppercase font-bold tracking-wider flex items-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <LogOut className="w-3.5 h-3.5 text-[#C85A32]" />
+              <span className="hidden sm:inline">Cerrar Sesión</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onOpenAuthSheet}
+              aria-label="Acceso Barberos"
+              className="h-8 px-2.5 rounded-sm bg-[#121214] border border-[#242428] hover:border-[#D49A2A] text-[#8A8A93] hover:text-[#F2EFE9] font-mono-code text-[11px] flex items-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <KeyRound className="w-3.5 h-3.5 text-[#D49A2A]" />
+              <span>Acceso Barberos</span>
+            </button>
+          )}
         </div>
       </div>
     </header>

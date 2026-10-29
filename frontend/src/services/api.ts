@@ -18,11 +18,23 @@ const TOKEN_STORAGE_KEY = 'turnero_barber_jwt';
 const USER_STORAGE_KEY = 'turnero_barber_user';
 
 export function getStoredToken(): string | null {
-  return localStorage.getItem(TOKEN_STORAGE_KEY);
+  const raw =
+    localStorage.getItem(TOKEN_STORAGE_KEY) ||
+    sessionStorage.getItem(TOKEN_STORAGE_KEY);
+  if (!raw) return null;
+  if (raw.startsWith('demo_jwt_') || raw.split('.').length !== 3) {
+    clearSession();
+    return null;
+  }
+  return raw;
 }
 
 export function getStoredUser(): User | null {
-  const raw = localStorage.getItem(USER_STORAGE_KEY);
+  const token = getStoredToken();
+  if (!token) return null;
+  const raw =
+    localStorage.getItem(USER_STORAGE_KEY) ||
+    sessionStorage.getItem(USER_STORAGE_KEY);
   if (!raw) return null;
   try {
     return JSON.parse(raw) as User;
@@ -58,24 +70,27 @@ export function saveSession(token: string, user: User) {
 export function clearSession() {
   localStorage.removeItem(TOKEN_STORAGE_KEY);
   localStorage.removeItem(USER_STORAGE_KEY);
+  sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+  sessionStorage.removeItem(USER_STORAGE_KEY);
 }
 
 async function request<T>(
   path: string,
-  options: RequestInit = {},
+  options: RequestInit & { skipAuth?: boolean; tokenOverride?: string | null } = {},
 ): Promise<T> {
-  const token = getStoredToken();
+  const { skipAuth, tokenOverride, ...fetchOptions } = options;
+  const token = skipAuth ? null : tokenOverride || getStoredToken();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...(options.headers as Record<string, string>),
+    ...(fetchOptions.headers as Record<string, string>),
   };
 
-  if (token) {
+  if (token && !headers['Authorization']) {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
   const res = await fetch(`${API_BASE_URL}${path}`, {
-    ...options,
+    ...fetchOptions,
     headers,
   });
 
@@ -101,6 +116,7 @@ export const api = {
       '/auth/login',
       {
         method: 'POST',
+        skipAuth: true,
         body: JSON.stringify({ dni, password }),
       },
     );
@@ -108,27 +124,19 @@ export const api = {
     return data;
   },
 
-  async registerClient(payload: {
-    dni: string;
-    password: string;
-    name: string;
-    phone: string;
-    email?: string;
-  }) {
-    const data = await request<{ access_token: string; user: User }>(
-      '/auth/register',
-      {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      },
-    );
-    saveSession(data.access_token, data.user);
-    return data;
+  async getAuthMe(tokenOverride?: string | null): Promise<User> {
+    return request<User>('/auth/me', {
+      method: 'GET',
+      tokenOverride,
+    });
   },
 
   async getPublicSchedule(slug: string): Promise<PublicBarberScheduleResponse> {
     return request<PublicBarberScheduleResponse>(
       `/appointments/public/${encodeURIComponent(slug)}`,
+      {
+        skipAuth: true,
+      },
     );
   },
 
@@ -190,17 +198,14 @@ export const api = {
       phone?: string;
     },
   ): Promise<LockSlotResponse> {
-    const res = await request<LockSlotResponse>(
+    return request<LockSlotResponse>(
       `/appointments/${encodeURIComponent(slotId)}/lock`,
       {
         method: 'POST',
+        skipAuth: true,
         body: JSON.stringify(inlineCredentials || {}),
       },
     );
-    if (res.access_token && res.user) {
-      saveSession(res.access_token, res.user);
-    }
-    return res;
   },
 
   async createPaymentPreference(payload: {
@@ -221,11 +226,12 @@ export const api = {
       slot_id?: string;
     }>('/payments/create-preference', {
       method: 'POST',
+      skipAuth: true,
       body: JSON.stringify(payload),
     });
   },
 
-  async getBarberMe(): Promise<{
+  async getBarberMe(tokenOverride?: string | null): Promise<{
     user: User | null;
     barber: {
       id: string;
@@ -236,7 +242,7 @@ export const api = {
     } | null;
     slug: string | null;
   }> {
-    return request('/barbers/me');
+    return request('/barbers/me', { tokenOverride });
   },
 
   async simulateMercadoPagoWebhook(
@@ -247,6 +253,7 @@ export const api = {
     const mockPaymentId = `mp_pay_${Date.now()}_${uniqueSuffix}`;
     return request<WebhookSimulationResponse>('/payments/webhook', {
       method: 'POST',
+      skipAuth: true,
       body: JSON.stringify({
         type: 'payment',
         payment_id: mockPaymentId,
@@ -261,6 +268,7 @@ export const api = {
       `/appointments/${encodeURIComponent(slotId)}/release-lock`,
       {
         method: 'POST',
+        skipAuth: true,
       },
     );
   },
@@ -271,7 +279,7 @@ export const api = {
     );
   },
 
-  async getBarberSlots() {
+  async getBarberSlots(tokenOverride?: string | null) {
     return request<{
       barber: {
         id: string;
@@ -282,18 +290,21 @@ export const api = {
       };
       weekly_goal?: WeeklyGoalMetrics;
       slots: AppointmentSlot[];
-    }>('/appointments/barber/slots');
+    }>('/appointments/barber/slots', { tokenOverride });
   },
 
-  async manageBarberSlots(payload: {
-    date?: string;
-    end_date?: string;
-    start_time?: string;
-    end_time?: string;
-    break_start_time?: string;
-    break_end_time?: string;
-    slot_start_time?: string;
-  }) {
+  async manageBarberSlots(
+    payload: {
+      date?: string;
+      end_date?: string;
+      start_time?: string;
+      end_time?: string;
+      break_start_time?: string;
+      break_end_time?: string;
+      slot_start_time?: string;
+    },
+    tokenOverride?: string | null,
+  ) {
     return request<{
       action: string;
       days_processed?: number;
@@ -302,26 +313,37 @@ export const api = {
       slots?: AppointmentSlot[];
     }>('/appointments/barber/slots', {
       method: 'POST',
+      tokenOverride,
       body: JSON.stringify(payload),
     });
   },
 
-  async listAdminBarbers(): Promise<AdminBarberItem[]> {
-    return request<AdminBarberItem[]>('/admin/barbers');
+  async listAdminBarbers(tokenOverride?: string | null): Promise<AdminBarberItem[]> {
+    const token = tokenOverride || getStoredToken();
+    return request<AdminBarberItem[]>('/admin/barbers', {
+      tokenOverride: token,
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
   },
 
-  async createAdminBarber(payload: {
-    dni: string;
-    password: string;
-    name: string;
-    phone: string;
-    shopName: string;
-    shop_name?: string;
-    slug?: string;
-    address?: string;
-  }) {
+  async createAdminBarber(
+    payload: {
+      dni: string;
+      password: string;
+      name: string;
+      phone: string;
+      shopName: string;
+      shop_name?: string;
+      slug?: string;
+      address?: string;
+    },
+    tokenOverride?: string | null,
+  ) {
+    const token = tokenOverride || getStoredToken();
     return request<AdminBarberItem>('/admin/barbers', {
       method: 'POST',
+      tokenOverride: token,
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
       body: JSON.stringify({
         name: payload.name,
         dni: payload.dni,
@@ -335,30 +357,46 @@ export const api = {
     });
   },
 
-  async toggleBarberReminder(barberId: string, active: boolean) {
-    return request(`/admin/barbers/${encodeURIComponent(barberId)}/toggle-reminder`, {
-      method: 'PATCH',
-      body: JSON.stringify({ active }),
-    });
+  async toggleBarberReminder(
+    barberId: string,
+    active: boolean,
+    tokenOverride?: string | null,
+  ) {
+    const token = tokenOverride || getStoredToken();
+    return request(
+      `/admin/barbers/${encodeURIComponent(barberId)}/toggle-reminder`,
+      {
+        method: 'PATCH',
+        tokenOverride: token,
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: JSON.stringify({ active }),
+      },
+    );
   },
 
-  async listWeeklySettlements(): Promise<{
+  async listWeeklySettlements(tokenOverride?: string | null): Promise<{
     current_week_start: string;
     current_week_end: string;
     settlements: WeeklySettlementItem[];
   }> {
+    const token = tokenOverride || getStoredToken();
     return request<{
       current_week_start: string;
       current_week_end: string;
       settlements: WeeklySettlementItem[];
-    }>('/admin/settlements');
+    }>('/admin/settlements', {
+      tokenOverride: token,
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
   },
 
   async markSettlementTransferred(
     barberId: string,
     weekStartIso: string,
     transferred = true,
+    tokenOverride?: string | null,
   ) {
+    const token = tokenOverride || getStoredToken();
     return request<{
       settlement_id: string;
       barber_id: string;
@@ -367,6 +405,8 @@ export const api = {
       transferred_at: string | null;
     }>(`/admin/settlements/${encodeURIComponent(barberId)}/transfer`, {
       method: 'PATCH',
+      tokenOverride: token,
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
       body: JSON.stringify({
         week_start: weekStartIso,
         transferred,

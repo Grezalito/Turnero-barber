@@ -1,27 +1,19 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { AuthBottomSheet } from './components/AuthBottomSheet';
 import { BarberDashboardView } from './components/BarberDashboardView';
-import { ClientAppointmentsView } from './components/ClientAppointmentsView';
 import { ActiveView, Header } from './components/Header';
+import { LoginModal } from './components/LoginModal';
 import {
-  formatTime30m,
   InlineBookingClientData,
   PublicBookingView,
 } from './components/PublicBookingView';
 import { SuperAdminView } from './components/SuperAdminView';
-import {
-  api,
-  clearSession,
-  getStoredUser,
-  saveSession,
-} from './services/api';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import { api } from './services/api';
 import {
   AdminBarberItem,
   AppointmentSlot,
-  ClientAppointmentSlot,
   LockSlotResponse,
   PublicBarberScheduleResponse,
-  User,
   WeeklyGoalMetrics,
   WeeklySettlementItem,
 } from './types/api';
@@ -264,24 +256,16 @@ function resolveSlugFromPathname(pathname: string): string | null {
   return null;
 }
 
-export const App: React.FC = () => {
-  const [user, setUser] = useState<User | null>(() => getStoredUser());
+const AppContent: React.FC = () => {
+  const { user, token, login, logout } = useAuth();
   const [slug, setSlug] = useState<string>(() => {
     const pathSlug = resolveSlugFromPathname(window.location.pathname);
     if (pathSlug) return pathSlug;
-    const stored = getStoredUser();
-    if (stored?.barber_profile?.slug) return stored.barber_profile.slug;
     return 'obsidian-studio';
   });
-  const [activeView, setActiveView] = useState<ActiveView>(() => {
-    const pathSlug = resolveSlugFromPathname(window.location.pathname);
-    if (pathSlug) return 'PUBLIC_BOOKING';
-    const u = getStoredUser();
-    if (u?.role === 'BARBER') return 'BARBER_PANEL';
-    if (u?.role === 'SUPERADMIN') return 'SUPERADMIN_PANEL';
-    return 'PUBLIC_BOOKING';
-  });
-  const [isAuthSheetOpen, setIsAuthSheetOpen] = useState(false);
+  // Sin auto-ingreso forzado al abrir la app: inicia siempre en vista pública (Guest Checkout)
+  const [activeView, setActiveView] = useState<ActiveView>('PUBLIC_BOOKING');
+  const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
 
   const [schedule, setSchedule] = useState<PublicBarberScheduleResponse>(() =>
     buildInitialDemoSchedule(
@@ -291,8 +275,6 @@ export const App: React.FC = () => {
   const [selectedSlot, setSelectedSlot] = useState<AppointmentSlot | null>(
     null,
   );
-  const [pendingSlotForAuth, setPendingSlotForAuth] =
-    useState<AppointmentSlot | null>(null);
   const [activeLock, setActiveLock] = useState<LockSlotResponse | null>(null);
   const [isSandboxCheckoutOpen, setIsSandboxCheckoutOpen] = useState(false);
 
@@ -307,10 +289,6 @@ export const App: React.FC = () => {
     emailMode?: string;
   } | null>(null);
   const [isLocking, setIsLocking] = useState(false);
-
-  // Client appointments state
-  const [clientSlots, setClientSlots] = useState<ClientAppointmentSlot[]>([]);
-  const [loadingClientSlots, setLoadingClientSlots] = useState(false);
 
   // Barber panel state
   const [barberSlots, setBarberSlots] = useState<AppointmentSlot[]>(() =>
@@ -327,14 +305,13 @@ export const App: React.FC = () => {
     address?: string | null;
     reminder_addon_active: boolean;
   }>(() => {
-    const stored = getStoredUser();
-    if (stored?.barber_profile) {
+    if (user?.barber_profile) {
       return {
-        id: stored.barber_profile.id,
-        slug: stored.barber_profile.slug,
-        shop_name: stored.barber_profile.shop_name,
-        address: stored.barber_profile.address,
-        reminder_addon_active: stored.barber_profile.reminder_addon_active,
+        id: user.barber_profile.id,
+        slug: user.barber_profile.slug,
+        shop_name: user.barber_profile.shop_name,
+        address: user.barber_profile.address,
+        reminder_addon_active: user.barber_profile.reminder_addon_active,
       };
     }
     return {
@@ -385,22 +362,9 @@ export const App: React.FC = () => {
     }
   }, []);
 
-  const loadClientAppointments = useCallback(async () => {
-    if (!user) return;
-    setLoadingClientSlots(true);
-    try {
-      const data = await api.getClientSlots();
-      setClientSlots(data.slots);
-    } catch {
-      // Conservar lista local en modo offline
-    } finally {
-      setLoadingClientSlots(false);
-    }
-  }, [user]);
-
   const loadBarberDashboard = useCallback(async () => {
     try {
-      const data = await api.getBarberSlots();
+      const data = await api.getBarberSlots(token);
       setBarberInfo(data.barber);
       setBarberSlots(data.slots);
       if (data.weekly_goal) {
@@ -411,13 +375,13 @@ export const App: React.FC = () => {
         prev.length > 0 ? prev : buildInitialDemoBarberSlots(schedule.dates),
       );
     }
-  }, [schedule.dates]);
+  }, [schedule.dates, token]);
 
   const loadAdminBarbers = useCallback(async () => {
     try {
       const [list, settlementsRes] = await Promise.all([
-        api.listAdminBarbers(),
-        api.listWeeklySettlements().catch(() => null),
+        api.listAdminBarbers(token),
+        api.listWeeklySettlements(token).catch(() => null),
       ]);
       setAdminBarbers(list);
       if (settlementsRes?.settlements) {
@@ -426,7 +390,7 @@ export const App: React.FC = () => {
     } catch {
       // Conservar lista actual en modo preview
     }
-  }, []);
+  }, [token]);
 
   useEffect(() => {
     const handlePopState = () => {
@@ -445,27 +409,18 @@ export const App: React.FC = () => {
   }, [slug, loadPublicSchedule]);
 
   useEffect(() => {
-    if (user) {
-      loadClientAppointments();
-    } else {
-      setClientSlots([]);
+    if (!user && (activeView === 'BARBER_PANEL' || activeView === 'SUPERADMIN_PANEL')) {
+      setActiveView('PUBLIC_BOOKING');
     }
-  }, [user, loadClientAppointments]);
+  }, [user, activeView]);
 
   useEffect(() => {
     if (activeView === 'BARBER_PANEL') {
       loadBarberDashboard();
     } else if (activeView === 'SUPERADMIN_PANEL') {
       loadAdminBarbers();
-    } else if (activeView === 'CLIENT_APPOINTMENTS') {
-      loadClientAppointments();
     }
-  }, [
-    activeView,
-    loadBarberDashboard,
-    loadAdminBarbers,
-    loadClientAppointments,
-  ]);
+  }, [activeView, loadBarberDashboard, loadAdminBarbers]);
 
   const executeLockForSlot = async (
     slot: AppointmentSlot,
@@ -481,9 +436,6 @@ export const App: React.FC = () => {
     setStatusMessage(null);
     try {
       const lockRes = await api.lockSlot(slot.id, credentials);
-      if (lockRes.user) {
-        setUser(lockRes.user);
-      }
       setActiveLock(lockRes);
       setSelectedSlot(null);
       const paymentUrl =
@@ -498,7 +450,6 @@ export const App: React.FC = () => {
       }
       setIsSandboxCheckoutOpen(true);
       await loadPublicSchedule(slug);
-      await loadClientAppointments();
     } catch (err) {
       const msg = (err as Error).message || '';
       if (msg.includes('409') || msg.includes('reservado')) {
@@ -507,19 +458,6 @@ export const App: React.FC = () => {
         return;
       }
 
-      if (credentials) {
-        const fallbackUser: User = {
-          id: `usr_${credentials.dni}`,
-          dni: credentials.dni,
-          name: credentials.name || user?.name || `Cliente DNI ${credentials.dni}`,
-          phone: credentials.phone || user?.phone || '+5491100000000',
-          role: 'CLIENT',
-        };
-        saveSession(`demo_jwt_${credentials.dni}`, fallbackUser);
-        setUser(fallbackUser);
-      }
-
-      // Fallback local atómico si el backend está offline durante la prueba visual
       const lockedUntil = new Date(Date.now() + 10 * 60 * 1000).toISOString();
       const fallbackLock: LockSlotResponse = {
         slot: {
@@ -564,116 +502,37 @@ export const App: React.FC = () => {
       });
       return;
     }
-    if (!user) {
-      setPendingSlotForAuth(slot);
-      setIsAuthSheetOpen(true);
-      return;
-    }
     await executeLockForSlot(slot);
   };
 
   const handleLogin = async (dni: string, password: string) => {
-    try {
-      const res = await api.login(dni, password);
-      setUser(res.user);
-      if (res.user.barber_profile) {
-        setBarberInfo({
-          id: res.user.barber_profile.id,
-          slug: res.user.barber_profile.slug,
-          shop_name: res.user.barber_profile.shop_name,
-          address: res.user.barber_profile.address,
-          reminder_addon_active: res.user.barber_profile.reminder_addon_active,
-        });
-        setSlug(res.user.barber_profile.slug);
-        setBarberSlots([]);
-      }
-      if (pendingSlotForAuth) {
-        const slotToLock = pendingSlotForAuth;
-        setPendingSlotForAuth(null);
-        setActiveView('PUBLIC_BOOKING');
-        await executeLockForSlot(slotToLock, { dni, password });
-      } else if (res.user.role === 'SUPERADMIN') {
-        setActiveView('SUPERADMIN_PANEL');
-      } else if (res.user.role === 'BARBER') {
-        setActiveView('BARBER_PANEL');
-      }
-    } catch (err) {
-      const msg = (err as Error).message || '';
-      if (msg.includes('DNI o contraseña') || msg.includes('Error HTTP')) {
-        throw err;
-      }
-      const role =
-        dni === '00000000'
-          ? 'SUPERADMIN'
-          : dni === '34888999'
-            ? 'BARBER'
-            : 'CLIENT';
-      const fallbackUser: User = {
-        id: `usr_${dni}`,
-        dni,
-        name:
-          role === 'SUPERADMIN'
-            ? 'SuperAdmin Plataforma'
-            : role === 'BARBER'
-              ? 'Facundo Quiroga'
-              : `Cliente DNI ${dni}`,
-        phone: '+5491100000000',
-        role,
-      };
-      saveSession(`demo_jwt_${dni}`, fallbackUser);
-      setUser(fallbackUser);
-
-      if (pendingSlotForAuth) {
-        const slotToLock = pendingSlotForAuth;
-        setPendingSlotForAuth(null);
-        setActiveView('PUBLIC_BOOKING');
-        await executeLockForSlot(slotToLock, { dni, password });
-      } else if (role === 'SUPERADMIN') {
-        setActiveView('SUPERADMIN_PANEL');
-      } else if (role === 'BARBER') {
-        setActiveView('BARBER_PANEL');
-      }
+    const res = await login(dni, password);
+    if (res.user.barber_profile) {
+      setBarberInfo({
+        id: res.user.barber_profile.id,
+        slug: res.user.barber_profile.slug,
+        shop_name: res.user.barber_profile.shop_name,
+        address: res.user.barber_profile.address,
+        reminder_addon_active: res.user.barber_profile.reminder_addon_active,
+      });
+      setSlug(res.user.barber_profile.slug);
+      setBarberSlots([]);
+    }
+    if (res.user.role === 'SUPERADMIN') {
+      setActiveView('SUPERADMIN_PANEL');
+    } else if (res.user.role === 'BARBER') {
+      setActiveView('BARBER_PANEL');
     }
   };
 
-  const handleRegister = async (payload: {
-    dni: string;
-    password: string;
-    name: string;
-    phone: string;
-    email?: string;
-  }) => {
-    try {
-      const res = await api.registerClient(payload);
-      setUser(res.user);
-      if (pendingSlotForAuth) {
-        const slotToLock = pendingSlotForAuth;
-        setPendingSlotForAuth(null);
-        setActiveView('PUBLIC_BOOKING');
-        await executeLockForSlot(slotToLock, {
-          dni: payload.dni,
-          password: payload.password,
-        });
-      }
-    } catch {
-      const fallbackUser: User = {
-        id: `usr_${payload.dni}`,
-        dni: payload.dni,
-        name: payload.name,
-        phone: payload.phone,
-        email: payload.email || null,
-        role: 'CLIENT',
-      };
-      saveSession(`demo_jwt_${payload.dni}`, fallbackUser);
-      setUser(fallbackUser);
-      if (pendingSlotForAuth) {
-        const slotToLock = pendingSlotForAuth;
-        setPendingSlotForAuth(null);
-        setActiveView('PUBLIC_BOOKING');
-        await executeLockForSlot(slotToLock);
-      }
+  const handleLogout = useCallback(() => {
+    logout();
+    setActiveView('PUBLIC_BOOKING');
+    setIsLoginModalOpen(false);
+    if (window.location.pathname !== '/') {
+      window.history.pushState({}, '', '/');
     }
-  };
+  }, [logout]);
 
   const handleSimulateWebhook = async (slotId: string) => {
     const lockedStart = activeLock?.slot.start_time;
@@ -693,52 +552,16 @@ export const App: React.FC = () => {
         emailMode: res.email_mode,
       });
       await loadPublicSchedule(slug);
-      await loadClientAppointments();
     } catch {
       const mockPaymentId = `mp_pay_${Date.now()}`;
       const mockMsg = barberInfo.reminder_addon_active
-        ? `[MOCK DeepSeek IA] Hola ${user?.name || 'Cliente'}, te recordamos tu turno de 30 min en ${schedule.barber.shop_name}. Seña de $2.000 ARS acreditada.`
+        ? `[MOCK DeepSeek IA] Hola Cliente, te recordamos tu turno de 30 min en ${schedule.barber.shop_name}. Seña de $2.000 ARS acreditada.`
         : null;
       const fallbackStart =
         lockedStart || new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
       const fallbackEnd =
         lockedEnd ||
         new Date(new Date(fallbackStart).getTime() + 30 * 60 * 1000).toISOString();
-
-      setClientSlots((prev) => [
-        {
-          id: slotId,
-          start_time: fallbackStart,
-          end_time: fallbackEnd,
-          status: 'CONFIRMED',
-          deposit_amount: 2000,
-          mp_payment_id: mockPaymentId,
-          barber: {
-            id: schedule.barber.id,
-            slug: schedule.barber.slug,
-            shop_name: schedule.barber.shop_name,
-            address: schedule.barber.address,
-            reminder_addon_active: barberInfo.reminder_addon_active,
-            user: {
-              name: schedule.barber.barber_name,
-              phone: schedule.barber.barber_phone || '+5491155667788',
-            },
-          },
-          reminders: mockMsg
-            ? [
-                {
-                  id: `rem_${Date.now()}`,
-                  status: 'PENDING',
-                  scheduled_for: new Date(
-                    new Date(fallbackStart).getTime() - 2 * 60 * 60 * 1000,
-                  ).toISOString(),
-                  generated_message: mockMsg,
-                },
-              ]
-            : [],
-        },
-        ...prev.filter((s) => s.id !== slotId),
-      ]);
 
       setBarberWeeklyGoal((prev) =>
         calculateWeeklyGoalMetrics((prev?.confirmed_count ?? 22) + 1),
@@ -803,20 +626,16 @@ export const App: React.FC = () => {
       setActiveLock(null);
       setIsSandboxCheckoutOpen(false);
       await loadPublicSchedule(slug);
-      await loadClientAppointments();
     }
   };
 
-  const confirmedClientCount = clientSlots.filter(
-    (s) => s.status === 'CONFIRMED',
-  ).length;
   const totalAvailablePublicSlots = Object.values(schedule.dates).reduce(
     (acc, list) => acc + list.length,
     0,
   );
 
   return (
-    <div className="min-h-[100dvh] w-full overflow-x-hidden bg-[#090D16] text-[#F8FAFC]">
+    <div className="min-h-[100dvh] w-full overflow-x-hidden bg-[#0A0A0B] text-[#F2EFE9]">
       <Header
         user={user}
         activeView={activeView}
@@ -824,16 +643,13 @@ export const App: React.FC = () => {
         currentSlug={slug}
         shopName={schedule.barber.shop_name}
         availableCount={totalAvailablePublicSlots}
-        clientConfirmedCount={confirmedClientCount}
-        onOpenAuthSheet={() => {
-          setPendingSlotForAuth(null);
-          setIsAuthSheetOpen(true);
-        }}
+        onOpenAuthSheet={() => setIsLoginModalOpen(true)}
+        onLogout={handleLogout}
       />
 
       <main className="max-w-3xl mx-auto pt-14 px-3.5 sm:px-4">
         {statusMessage && (
-          <div className="mb-3 p-3 rounded-lg bg-[#0F172A] border border-[#2563EB] text-xs font-medium text-[#F8FAFC]">
+          <div className="mb-3 p-3 rounded-sm bg-[#121214] border border-[#D49A2A] text-xs font-medium text-[#F2EFE9]">
             {statusMessage}
           </div>
         )}
@@ -844,7 +660,6 @@ export const App: React.FC = () => {
             slug={slug}
             onChangeSlug={(newSlug) => setSlug(newSlug)}
             onRefresh={() => loadPublicSchedule(slug)}
-            user={user}
             selectedSlot={selectedSlot}
             onSelectSlot={setSelectedSlot}
             activeLock={activeLock}
@@ -854,43 +669,9 @@ export const App: React.FC = () => {
             onReleaseLock={handleReleaseLock}
             isSandboxCheckoutOpen={isSandboxCheckoutOpen}
             onSetSandboxCheckoutOpen={setIsSandboxCheckoutOpen}
-            onGoToClientAppointments={
-              user ? () => setActiveView('CLIENT_APPOINTMENTS') : undefined
-            }
+            onOpenBarberAccess={() => setIsLoginModalOpen(true)}
             confirmedSlotInfo={confirmedSlotInfo}
             isLocking={isLocking}
-          />
-        )}
-
-        {activeView === 'CLIENT_APPOINTMENTS' && user && (
-          <ClientAppointmentsView
-            user={user}
-            slots={clientSlots}
-            loading={loadingClientSlots}
-            onRefresh={loadClientAppointments}
-            onGoToBookNew={(targetSlug) => {
-              if (targetSlug) setSlug(targetSlug);
-              setActiveView('PUBLIC_BOOKING');
-            }}
-            activeLock={activeLock}
-            onOpenSandboxCheckout={() => {
-              setActiveView('PUBLIC_BOOKING');
-              setIsSandboxCheckoutOpen(true);
-            }}
-            onCancelAppointment={async (slotId) => {
-              try {
-                await api.cancelAppointmentNoRefund(slotId);
-                setStatusMessage(
-                  'Turno cancelado. Reserva garantizada: la seña de $2.000 ARS fue retenida (no reembolsable ni transferible).',
-                );
-                await loadClientAppointments();
-              } catch {
-                setClientSlots((prev) => prev.filter((s) => s.id !== slotId));
-                setStatusMessage(
-                  'Turno cancelado. Reserva garantizada: la seña de $2.000 ARS fue retenida (no reembolsable ni transferible).',
-                );
-              }
-            }}
           />
         )}
 
@@ -899,6 +680,7 @@ export const App: React.FC = () => {
             barberInfo={barberInfo}
             slots={barberSlots}
             weeklyGoal={barberWeeklyGoal}
+            onLogout={handleLogout}
             onSwitchToPublicView={() => {
               const targetSlug = barberInfo.slug || slug;
               setSlug(targetSlug);
@@ -914,14 +696,17 @@ export const App: React.FC = () => {
               break_end_time,
             }) => {
               try {
-                const res = await api.manageBarberSlots({
-                  date,
-                  end_date,
-                  start_time,
-                  end_time,
-                  break_start_time,
-                  break_end_time,
-                });
+                const res = await api.manageBarberSlots(
+                  {
+                    date,
+                    end_date,
+                    start_time,
+                    end_time,
+                    break_start_time,
+                    break_end_time,
+                  },
+                  token,
+                );
                 await loadBarberDashboard();
                 await loadPublicSchedule(slug);
                 return res;
@@ -964,7 +749,10 @@ export const App: React.FC = () => {
             }}
             onToggleSingleSlot={async ({ date, slot_start_time }) => {
               try {
-                await api.manageBarberSlots({ date, slot_start_time });
+                await api.manageBarberSlots(
+                  { date, slot_start_time },
+                  token,
+                );
                 await loadBarberDashboard();
                 await loadPublicSchedule(slug);
               } catch {
@@ -998,51 +786,44 @@ export const App: React.FC = () => {
           <SuperAdminView
             barbers={adminBarbers}
             settlements={adminSettlements}
+            onLogout={handleLogout}
+            onOpenBarberPublicSlug={(targetSlug) => {
+              setSlug(targetSlug);
+              window.history.pushState({}, '', `/${targetSlug}`);
+              setActiveView('PUBLIC_BOOKING');
+            }}
             onCreateBarber={async (payload) => {
-              try {
-                const created = await api.createAdminBarber(payload);
-                await loadAdminBarbers();
-                if (created?.slug) {
-                  setSlug(created.slug);
-                }
-              } catch (err) {
-                const msg = (err as Error).message || '';
-                if (!msg.toLowerCase().includes('failed to fetch')) {
-                  throw err;
-                }
-                const generatedSlug =
-                  payload.slug ||
-                  payload.shopName
-                    .normalize('NFD')
-                    .replace(/[\u0300-\u036f]/g, '')
-                    .toLowerCase()
-                    .trim()
-                    .replace(/[^a-z0-9\s-]/g, '')
-                    .replace(/[\s_-]+/g, '-')
-                    .replace(/^-+|-+$/g, '');
-                const newItem: AdminBarberItem = {
-                  id: `barber_${Date.now()}`,
-                  slug: generatedSlug,
-                  shop_name: payload.shopName || payload.shop_name,
-                  address: payload.address,
-                  reminder_addon_active: false,
-                  confirmed_appointments_count: 0,
-                  estimated_platform_revenue_ars: 0,
-                  user: {
-                    id: `u_${Date.now()}`,
-                    dni: payload.dni,
-                    name: payload.name,
-                    phone: payload.phone,
-                    created_at: new Date().toISOString(),
-                  },
-                  created_at: new Date().toISOString(),
-                };
-                setAdminBarbers((prev) => [newItem, ...prev]);
-              }
+              const created = await api.createAdminBarber(payload, token);
+              const createdItem: AdminBarberItem = {
+                id: created.id,
+                slug: created.slug,
+                shop_name: created.shop_name,
+                address: created.address,
+                reminder_addon_active: Boolean(created.reminder_addon_active),
+                confirmed_appointments_count:
+                  created.confirmed_appointments_count || 0,
+                estimated_platform_revenue_ars:
+                  created.estimated_platform_revenue_ars || 0,
+                user: {
+                  id: created.user.id,
+                  dni: created.user.dni,
+                  name: created.user.name,
+                  phone: created.user.phone,
+                  created_at:
+                    created.user.created_at || new Date().toISOString(),
+                },
+                created_at: created.created_at || new Date().toISOString(),
+              };
+              setAdminBarbers((prev) => [
+                createdItem,
+                ...prev.filter((b) => b.id !== createdItem.id),
+              ]);
+              await loadAdminBarbers();
+              return createdItem;
             }}
             onToggleReminder={async (barberId, active) => {
               try {
-                await api.toggleBarberReminder(barberId, active);
+                await api.toggleBarberReminder(barberId, active, token);
                 await loadAdminBarbers();
               } catch {
                 setAdminBarbers((prev) =>
@@ -1064,6 +845,7 @@ export const App: React.FC = () => {
                   barberId,
                   weekStartIso,
                   transferred,
+                  token,
                 );
                 await loadAdminBarbers();
               } catch {
@@ -1086,30 +868,22 @@ export const App: React.FC = () => {
         )}
       </main>
 
-      <AuthBottomSheet
-        isOpen={isAuthSheetOpen}
-        onClose={() => {
-          setIsAuthSheetOpen(false);
-          setPendingSlotForAuth(null);
-        }}
+      <LoginModal
+        isOpen={isLoginModalOpen}
+        onClose={() => setIsLoginModalOpen(false)}
         user={user}
-        pendingSlotLabel={
-          pendingSlotForAuth
-            ? `${formatTime30m(pendingSlotForAuth.start_time)} – ${formatTime30m(pendingSlotForAuth.end_time)}`
-            : null
-        }
         onLoginSuccess={handleLogin}
-        onRegisterSuccess={handleRegister}
         onNavigateView={setActiveView}
-        onLogout={() => {
-          clearSession();
-          setUser(null);
-          setClientSlots([]);
-          setActiveView('PUBLIC_BOOKING');
-        }}
+        onLogout={handleLogout}
       />
     </div>
   );
 };
+
+export const App: React.FC = () => (
+  <AuthProvider>
+    <AppContent />
+  </AuthProvider>
+);
 
 export default App;

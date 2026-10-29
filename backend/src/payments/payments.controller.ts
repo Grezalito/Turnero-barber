@@ -7,6 +7,7 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
+import { Public } from '../auth/decorators/public.decorator';
 import { CreatePreferenceDto } from './dto/create-preference.dto';
 import { PaymentsService } from './payments.service';
 
@@ -16,12 +17,14 @@ export class PaymentsController {
 
   constructor(private readonly paymentsService: PaymentsService) {}
 
+  @Public()
   @Post('create-preference')
   @HttpCode(HttpStatus.OK)
   async createPreference(@Body() dto: CreatePreferenceDto) {
     return this.paymentsService.createPreferenceForSlot(dto);
   }
 
+  @Public()
   @Post('webhook')
   @HttpCode(HttpStatus.OK)
   async handleWebhook(

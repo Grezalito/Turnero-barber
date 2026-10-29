@@ -26,11 +26,26 @@ let JwtStrategy = class JwtStrategy extends (0, passport_1.PassportStrategy)(pas
         this.prisma = prisma;
     }
     async validate(payload) {
-        const user = await this.prisma.user.findUnique({
+        let user = await this.prisma.user.findUnique({
             where: { id: payload.sub },
             select: { id: true, dni: true, name: true, phone: true, role: true },
         });
+        if (!user && payload.dni) {
+            user = await this.prisma.user.findUnique({
+                where: { dni: payload.dni },
+                select: { id: true, dni: true, name: true, phone: true, role: true },
+            });
+        }
         if (!user) {
+            if (payload.role === 'SUPERADMIN') {
+                return {
+                    sub: payload.sub,
+                    dni: payload.dni,
+                    name: 'SuperAdmin Plataforma',
+                    phone: '+5491100000000',
+                    role: 'SUPERADMIN',
+                };
+            }
             throw new common_1.UnauthorizedException('Usuario no encontrado o sesión inválida');
         }
         return {

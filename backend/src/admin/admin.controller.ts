@@ -2,6 +2,8 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   Patch,
   Post,
@@ -22,6 +24,9 @@ export class AdminController {
   constructor(private readonly adminService: AdminService) {}
 
   @Post('barbers')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.SUPERADMIN)
   async createBarber(@Body() dto: CreateBarberDto) {
     return this.adminService.createBarber(dto);
   }

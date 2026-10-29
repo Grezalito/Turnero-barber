@@ -3,7 +3,6 @@ import {
   Clock,
   CheckCircle2,
   CreditCard,
-  TicketCheck,
   CalendarPlus,
   Download,
   MessageCircle,
@@ -11,13 +10,13 @@ import {
   X,
   CalendarX2,
   Loader2,
+  KeyRound,
 } from 'lucide-react';
 import { api } from '../services/api';
 import {
   AppointmentSlot,
   LockSlotResponse,
   PublicBarberScheduleResponse,
-  User,
 } from '../types/api';
 import {
   buildGoogleCalendarUrl,
@@ -36,7 +35,6 @@ interface PublicBookingViewProps {
   slug: string;
   onChangeSlug: (newSlug: string) => void;
   onRefresh: () => void;
-  user: User | null;
   selectedSlot: AppointmentSlot | null;
   onSelectSlot: (slot: AppointmentSlot | null) => void;
   activeLock?: LockSlotResponse | null;
@@ -51,7 +49,7 @@ interface PublicBookingViewProps {
   onReleaseLock?: (slotId: string) => Promise<void>;
   isSandboxCheckoutOpen?: boolean;
   onSetSandboxCheckoutOpen?: (open: boolean) => void;
-  onGoToClientAppointments?: () => void;
+  onOpenBarberAccess?: () => void;
   confirmedSlotInfo: {
     slotId: string;
     mpPaymentId: string;
@@ -104,10 +102,9 @@ export function formatDateHeader(dateStr: string): {
 export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
   schedule,
   onRefresh,
-  user,
   selectedSlot,
   onSelectSlot,
-  onGoToClientAppointments,
+  onOpenBarberAccess,
   confirmedSlotInfo,
   isLocking,
 }) => {
@@ -117,22 +114,14 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
   );
   const [selectedDate, setSelectedDate] = useState<string>(dateKeys[0] || '');
 
-  // Modal / Bottom Sheet minimalista de confirmación (DNI, Nombre, WhatsApp)
+  // Guest Checkout 100% libre de login (Solo Nombre, DNI, WhatsApp transaccionales)
   const [isConfirmSheetOpen, setIsConfirmSheetOpen] = useState(false);
-  const [confirmDni, setConfirmDni] = useState(user?.dni || '');
-  const [confirmName, setConfirmName] = useState(user?.name || '');
-  const [confirmPhone, setConfirmPhone] = useState(user?.phone || '');
+  const [confirmName, setConfirmName] = useState('');
+  const [confirmDni, setConfirmDni] = useState('');
+  const [confirmPhone, setConfirmPhone] = useState('');
   const [confirmError, setConfirmError] = useState<string | null>(null);
   const [isConnectingMp, setIsConnectingMp] = useState(false);
   const [toastAlert, setToastAlert] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (user) {
-      setConfirmDni(user.dni || '');
-      setConfirmName(user.name || '');
-      setConfirmPhone(user.phone || '');
-    }
-  }, [user]);
 
   useEffect(() => {
     if (dateKeys.length > 0 && !dateKeys.includes(selectedDate)) {
@@ -394,32 +383,21 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
 
       {/* Banner de Éxito cuando el turno fue confirmado */}
       {confirmedSlotInfo && (
-        <section className="p-4 rounded-lg bg-[#0F172A] border border-[#2563EB] space-y-3">
+        <section className="p-4 rounded-sm bg-[#121214] border border-[#D49A2A] space-y-3">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2.5">
-              <div className="w-9 h-9 rounded-md bg-[#2563EB]/12 border border-[#2563EB]/40 flex items-center justify-center text-[#2563EB] shrink-0">
+              <div className="w-9 h-9 rounded-sm bg-[#D49A2A]/15 border border-[#D49A2A]/40 flex items-center justify-center text-[#D49A2A] shrink-0">
                 <CheckCircle2 className="w-5 h-5" />
               </div>
               <div>
-                <span className="text-xs font-medium text-[#2563EB]">
+                <span className="font-mono-code text-xs font-medium text-[#D49A2A]">
                   Seña confirmada · $2.000 ARS
                 </span>
-                <h3 className="text-sm font-semibold text-[#F8FAFC]">
+                <h3 className="font-display text-sm font-bold uppercase text-[#F2EFE9]">
                   ¡Tu turno ya está reservado!
                 </h3>
               </div>
             </div>
-
-            {onGoToClientAppointments && (
-              <button
-                type="button"
-                onClick={onGoToClientAppointments}
-                className="min-h-[40px] px-3 rounded-lg bg-[#090D16] border border-[#334155] text-[#F8FAFC] text-xs font-medium flex items-center gap-1.5"
-              >
-                <TicketCheck className="w-3.5 h-3.5 text-[#2563EB]" />
-                <span>Mis turnos</span>
-              </button>
-            )}
           </div>
 
           {(() => {
@@ -453,7 +431,7 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
                   href={gcalUrl}
                   target="_blank"
                   rel="noreferrer"
-                  className="min-h-[44px] px-3 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] text-[#F8FAFC] text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
+                  className="min-h-[44px] px-3 rounded-sm bg-[#D49A2A] hover:bg-[#b8831f] text-[#0A0A0B] font-display text-xs uppercase font-extrabold tracking-wider flex items-center justify-center gap-1.5 transition-colors"
                 >
                   <CalendarPlus className="w-4 h-4 shrink-0" />
                   <span>Google Calendar</span>
@@ -472,9 +450,9 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
                       mpPaymentId: confirmedSlotInfo.mpPaymentId,
                     })
                   }
-                  className="min-h-[44px] px-3 rounded-lg bg-[#090D16] border border-[#334155] text-[#F8FAFC] text-xs font-medium flex items-center justify-center gap-1.5 transition-colors"
+                  className="min-h-[44px] px-3 rounded-sm bg-[#0A0A0B] border border-[#242428] text-[#F2EFE9] text-xs font-medium flex items-center justify-center gap-1.5 transition-colors"
                 >
-                  <Download className="w-4 h-4 text-[#2563EB] shrink-0" />
+                  <Download className="w-4 h-4 text-[#D49A2A] shrink-0" />
                   <span>Descargar .ICS</span>
                 </button>
 
@@ -482,9 +460,9 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
                   href={waUrl}
                   target="_blank"
                   rel="noreferrer"
-                  className="min-h-[44px] px-3 rounded-lg bg-[#090D16] border border-[#334155] text-[#F8FAFC] text-xs font-medium flex items-center justify-center gap-1.5 transition-colors"
+                  className="min-h-[44px] px-3 rounded-sm bg-[#0A0A0B] border border-[#242428] text-[#F2EFE9] text-xs font-medium flex items-center justify-center gap-1.5 transition-colors"
                 >
-                  <MessageCircle className="w-4 h-4 text-[#2563EB] shrink-0" />
+                  <MessageCircle className="w-4 h-4 text-[#D49A2A] shrink-0" />
                   <span>Avisar por WhatsApp</span>
                 </a>
               </div>
@@ -493,18 +471,32 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
         </section>
       )}
 
+      {/* Footer discreto con botón "Acceso Barberos" */}
+      {onOpenBarberAccess && (
+        <footer className="pt-6 pb-2 flex items-center justify-center">
+          <button
+            type="button"
+            onClick={onOpenBarberAccess}
+            className="px-3 py-1.5 rounded-sm bg-[#121214] border border-[#242428] hover:border-[#D49A2A] text-[#8A8A93] hover:text-[#F2EFE9] font-mono-code text-[11px] inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+          >
+            <KeyRound className="w-3 h-3 text-[#D49A2A]" />
+            <span>Acceso Barberos</span>
+          </button>
+        </footer>
+      )}
+
       {/* 3. BARRA INFERIOR FIJA (Sticky Bottom Bar) de 60px */}
-      <div className="fixed bottom-0 left-0 right-0 z-30 h-[60px] bg-[#0F172A]/95 backdrop-blur-md border-t border-[#1E293B] px-3.5 sm:px-6 flex items-center">
+      <div className="fixed bottom-0 left-0 right-0 z-30 h-[60px] bg-[#121214]/95 backdrop-blur-md border-t border-[#242428] px-3.5 sm:px-6 flex items-center">
         <div className="max-w-3xl w-full mx-auto flex items-center justify-between gap-3">
           {!selectedSlot ? (
-            <div className="w-full text-center text-sm font-medium text-[#94A3B8]">
+            <div className="w-full text-center text-sm font-medium text-[#8A8A93]">
               Seleccioná un horario para reservar
             </div>
           ) : (
             <div className="w-full flex items-center gap-3">
-              <div className="hidden sm:flex items-center gap-1.5 text-xs font-medium text-[#94A3B8] shrink-0">
-                <Clock className="w-3.5 h-3.5 text-[#2563EB]" />
-                <span className="text-[#F8FAFC] font-semibold">
+              <div className="hidden sm:flex items-center gap-1.5 font-mono-code text-xs font-medium text-[#8A8A93] shrink-0">
+                <Clock className="w-3.5 h-3.5 text-[#D49A2A]" />
+                <span className="text-[#F2EFE9] font-semibold">
                   {formatDateHeader(selectedDate).dayName}{' '}
                   {formatDateHeader(selectedDate).dayNumber} ·{' '}
                   {formatTime30m(selectedSlot.start_time)} hs
@@ -518,12 +510,12 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
                   setConfirmError(null);
                   setIsConfirmSheetOpen(true);
                 }}
-                className="w-full h-[44px] px-4 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-50 text-[#F8FAFC] text-sm font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer pointer-events-auto"
+                className="w-full h-[44px] px-4 rounded-sm bg-[#D49A2A] hover:bg-[#b8831f] disabled:opacity-50 text-[#0A0A0B] font-display text-xs sm:text-sm uppercase font-extrabold tracking-wider flex items-center justify-center gap-2 transition-colors cursor-pointer pointer-events-auto"
               >
                 <span>
                   {isBusy
                     ? 'Conectando con Mercado Pago...'
-                    : `${formatTime30m(selectedSlot.start_time)} hs · Reservar turno · Seña $2.000`}
+                    : `${formatTime30m(selectedSlot.start_time)} hs · Señar turno · $2.000`}
                 </span>
               </button>
             </div>
@@ -531,9 +523,9 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
         </div>
       </div>
 
-      {/* 4. MODAL / BOTTOM-SHEET MINIMALISTA DE CONFIRMACIÓN (Solo DNI, Nombre y WhatsApp -> Redirección Real a MP) */}
+      {/* 4. MODAL / BOTTOM-SHEET GUEST CHECKOUT (100% Invitado: Solo Nombre, DNI y WhatsApp -> Redirección Real a MP) */}
       {isConfirmSheetOpen && selectedSlot && (
-        <div className="fixed inset-0 z-50 h-[100dvh] flex items-end sm:items-center justify-center bg-[#090D16]/80 backdrop-blur-xs p-0 sm:p-4 pointer-events-auto">
+        <div className="fixed inset-0 z-50 h-[100dvh] flex items-end sm:items-center justify-center bg-[#0A0A0B]/85 backdrop-blur-xs p-0 sm:p-4 pointer-events-auto">
           <div
             className="fixed inset-0 z-40"
             onClick={() => {
@@ -541,13 +533,13 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
             }}
           />
 
-          <div className="relative z-50 w-full max-w-md bg-[#0F172A] border-t sm:border border-[#1E293B] rounded-t-xl sm:rounded-xl p-5 space-y-4 max-h-[90dvh] overflow-y-auto pointer-events-auto shadow-2xl">
-            <div className="flex items-center justify-between gap-3">
+          <div className="relative z-50 w-full max-w-md bg-[#121214] border-t sm:border border-[#242428] rounded-t-md sm:rounded-sm p-5 space-y-4 max-h-[90dvh] overflow-y-auto pointer-events-auto shadow-2xl">
+            <div className="flex items-center justify-between gap-3 border-b border-[#242428] pb-3">
               <div>
-                <h2 className="text-base font-semibold text-[#F8FAFC]">
+                <h2 className="font-display text-sm sm:text-base font-extrabold uppercase tracking-wider text-[#F2EFE9]">
                   Confirmar turno · {formatTime30m(selectedSlot.start_time)} hs
                 </h2>
-                <p className="text-xs text-[#94A3B8]">
+                <p className="font-mono-code text-xs text-[#8A8A93]">
                   {formatDateHeader(selectedDate).dayName}{' '}
                   {formatDateHeader(selectedDate).dayNumber}{' '}
                   {formatDateHeader(selectedDate).monthShort} ·{' '}
@@ -560,22 +552,37 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
                 onClick={() => setIsConfirmSheetOpen(false)}
                 disabled={isBusy}
                 aria-label="Cerrar"
-                className="w-9 h-9 rounded-lg bg-[#090D16] border border-[#1E293B] hover:border-[#334155] flex items-center justify-center text-[#94A3B8] hover:text-[#F8FAFC] cursor-pointer"
+                className="w-9 h-9 rounded-sm bg-[#0A0A0B] border border-[#242428] hover:border-[#D49A2A] flex items-center justify-center text-[#8A8A93] hover:text-[#F2EFE9] cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
             {confirmError && (
-              <div className="p-3 rounded-lg bg-[#090D16] border border-[#2563EB] flex items-center gap-2 text-xs text-[#F8FAFC]">
-                <ShieldAlert className="w-4 h-4 text-[#2563EB] shrink-0" />
+              <div className="p-3 rounded-sm bg-[#0A0A0B] border border-[#C85A32] flex items-center gap-2 font-mono-code text-xs text-[#F2EFE9]">
+                <ShieldAlert className="w-4 h-4 text-[#C85A32] shrink-0" />
                 <span>{confirmError}</span>
               </div>
             )}
 
             <form onSubmit={handleConfirmSheetSubmit} className="space-y-3">
               <div>
-                <label className="block text-xs font-medium text-[#94A3B8] mb-1">
+                <label className="block font-display text-[10px] uppercase tracking-wider text-[#8A8A93] mb-1">
+                  Nombre y Apellido
+                </label>
+                <input
+                  type="text"
+                  required
+                  disabled={isBusy}
+                  placeholder="Tu nombre y apellido"
+                  value={confirmName}
+                  onChange={(e) => setConfirmName(e.target.value)}
+                  className="w-full min-h-[46px] px-3.5 rounded-sm bg-[#0A0A0B] border border-[#242428] focus:border-[#D49A2A] focus:outline-none text-sm text-[#F2EFE9]"
+                />
+              </div>
+
+              <div>
+                <label className="block font-display text-[10px] uppercase tracking-wider text-[#8A8A93] mb-1">
                   DNI
                 </label>
                 <input
@@ -589,27 +596,12 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
                   onChange={(e) =>
                     setConfirmDni(e.target.value.replace(/\D/g, ''))
                   }
-                  className="w-full min-h-[48px] px-3.5 rounded-lg bg-[#090D16] border border-[#1E293B] focus:border-[#2563EB] focus:outline-none text-sm text-[#F8FAFC]"
+                  className="w-full min-h-[46px] px-3.5 rounded-sm bg-[#0A0A0B] border border-[#242428] focus:border-[#D49A2A] focus:outline-none font-mono-code text-sm text-[#F2EFE9]"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-[#94A3B8] mb-1">
-                  Nombre
-                </label>
-                <input
-                  type="text"
-                  required
-                  disabled={isBusy}
-                  placeholder="Tu nombre y apellido"
-                  value={confirmName}
-                  onChange={(e) => setConfirmName(e.target.value)}
-                  className="w-full min-h-[48px] px-3.5 rounded-lg bg-[#090D16] border border-[#1E293B] focus:border-[#2563EB] focus:outline-none text-sm text-[#F8FAFC]"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-[#94A3B8] mb-1">
+                <label className="block font-display text-[10px] uppercase tracking-wider text-[#8A8A93] mb-1">
                   WhatsApp
                 </label>
                 <input
@@ -620,19 +612,19 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
                   placeholder="Ej: 11 5566 7788"
                   value={confirmPhone}
                   onChange={(e) => setConfirmPhone(e.target.value)}
-                  className="w-full min-h-[48px] px-3.5 rounded-lg bg-[#090D16] border border-[#1E293B] focus:border-[#2563EB] focus:outline-none text-sm text-[#F8FAFC]"
+                  className="w-full min-h-[46px] px-3.5 rounded-sm bg-[#0A0A0B] border border-[#242428] focus:border-[#D49A2A] focus:outline-none font-mono-code text-sm text-[#F2EFE9]"
                 />
               </div>
 
-              <p className="text-[11px] text-[#94A3B8] truncate">
-                La seña de $2.000 ARS asegura tu turno y no es reembolsable por
-                inasistencia.
+              <p className="text-[11px] text-[#8A8A93]">
+                Sin registro ni cuenta. La seña de $2.000 ARS asegura tu turno y
+                no es reembolsable por inasistencia.
               </p>
 
               <button
                 type="submit"
                 disabled={isBusy}
-                className="w-full min-h-[48px] rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-60 text-[#F8FAFC] text-sm font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer pointer-events-auto"
+                className="w-full min-h-[48px] rounded-sm bg-[#D49A2A] hover:bg-[#b8831f] disabled:opacity-60 text-[#0A0A0B] font-display text-xs uppercase font-extrabold tracking-wider flex items-center justify-center gap-2 transition-colors cursor-pointer pointer-events-auto"
               >
                 {isBusy ? (
                   <>
@@ -642,7 +634,7 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
                 ) : (
                   <>
                     <CreditCard className="w-4 h-4 shrink-0" />
-                    <span>Reservar turno · Seña $2.000</span>
+                    <span>Continuar · Seña $2.000</span>
                   </>
                 )}
               </button>

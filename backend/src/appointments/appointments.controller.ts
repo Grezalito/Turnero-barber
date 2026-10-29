@@ -15,6 +15,7 @@ import {
   CurrentUser,
   JwtPayloadUser,
 } from '../auth/decorators/current-user.decorator';
+import { Public } from '../auth/decorators/public.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -52,11 +53,13 @@ export class AppointmentsController {
     return this.appointmentsService.getClientSlots(user.sub);
   }
 
+  @Public()
   @Get('public/:slug')
   async getPublicAvailableSlots(@Param('slug') slug: string) {
     return this.appointmentsService.getPublicAvailableSlotsBySlug(slug);
   }
 
+  @Public()
   @Get(':slotId/ics')
   async downloadSlotIcs(
     @Param('slotId') slotId: string,

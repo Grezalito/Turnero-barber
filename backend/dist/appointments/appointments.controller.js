@@ -17,6 +17,7 @@ const common_1 = require("@nestjs/common");
 const jwt_1 = require("@nestjs/jwt");
 const client_1 = require("@prisma/client");
 const current_user_decorator_1 = require("../auth/decorators/current-user.decorator");
+const public_decorator_1 = require("../auth/decorators/public.decorator");
 const roles_decorator_1 = require("../auth/decorators/roles.decorator");
 const jwt_auth_guard_1 = require("../auth/guards/jwt-auth.guard");
 const roles_guard_1 = require("../auth/guards/roles.guard");
@@ -95,6 +96,7 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], AppointmentsController.prototype, "getClientSlots", null);
 __decorate([
+    (0, public_decorator_1.Public)(),
     (0, common_1.Get)('public/:slug'),
     __param(0, (0, common_1.Param)('slug')),
     __metadata("design:type", Function),
@@ -102,6 +104,7 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], AppointmentsController.prototype, "getPublicAvailableSlots", null);
 __decorate([
+    (0, public_decorator_1.Public)(),
     (0, common_1.Get)(':slotId/ics'),
     __param(0, (0, common_1.Param)('slotId')),
     __param(1, (0, common_1.Res)()),

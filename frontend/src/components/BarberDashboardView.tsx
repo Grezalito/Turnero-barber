@@ -19,6 +19,7 @@ import {
   Copy,
   Check,
   Link2,
+  LogOut,
 } from 'lucide-react';
 import { api, getSlugFromAuthContext } from '../services/api';
 import { AppointmentSlot, WeeklyGoalMetrics } from '../types/api';
@@ -54,6 +55,7 @@ interface BarberDashboardViewProps {
     slot_start_time: string;
   }) => Promise<void>;
   onSwitchToPublicView?: () => void;
+  onLogout?: () => void;
 }
 
 type QuickViewFilter = 'HOY' | 'MANANA' | 'SEMANA';
@@ -114,6 +116,7 @@ export const BarberDashboardView: React.FC<BarberDashboardViewProps> = ({
   onGenerateRange,
   onToggleSingleSlot,
   onSwitchToPublicView,
+  onLogout,
 }) => {
   const todayIsoDate = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const tomorrowIsoDate = useMemo(() => {
@@ -465,6 +468,19 @@ export const BarberDashboardView: React.FC<BarberDashboardViewProps> = ({
             >
               <Eye className="w-4 h-4" />
               <span className="hidden sm:inline">Vista pública</span>
+            </button>
+          )}
+
+          {onLogout && (
+            <button
+              type="button"
+              onClick={onLogout}
+              title="Cerrar Sesión"
+              aria-label="Cerrar Sesión"
+              className="min-h-[44px] px-3 rounded-lg bg-[#0A0A0B] border border-[#C85A32] hover:bg-[#C85A32]/15 text-[#F2EFE9] text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <LogOut className="w-4 h-4 text-[#C85A32]" />
+              <span className="hidden sm:inline">Cerrar Sesión</span>
             </button>
           )}
         </div>

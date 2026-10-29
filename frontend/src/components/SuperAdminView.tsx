@@ -8,6 +8,10 @@ import {
   Trophy,
   ArrowRightLeft,
   CalendarRange,
+  Copy,
+  Check,
+  LogOut,
+  ExternalLink,
 } from 'lucide-react';
 import { AdminBarberItem, WeeklySettlementItem } from '../types/api';
 
@@ -34,13 +38,15 @@ export interface SuperAdminViewProps {
     shop_name: string;
     slug?: string;
     address?: string;
-  }) => Promise<void>;
+  }) => Promise<AdminBarberItem | void>;
   onToggleReminder: (barberId: string, active: boolean) => Promise<void>;
   onMarkSettlementTransferred: (
     barberId: string,
     weekStartIso: string,
     transferred: boolean,
   ) => Promise<void>;
+  onLogout?: () => void;
+  onOpenBarberPublicSlug?: (slug: string) => void;
 }
 
 export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
@@ -49,6 +55,8 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
   onCreateBarber,
   onToggleReminder,
   onMarkSettlementTransferred,
+  onLogout,
+  onOpenBarberPublicSlug,
 }) => {
   const [activeTab, setActiveTab] = useState<'LIQUIDACIONES' | 'BARBERIAS'>(
     'BARBERIAS',
@@ -69,6 +77,10 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [createdBarberSlug, setCreatedBarberSlug] = useState<string | null>(
+    null,
+  );
+  const [copiedSlug, setCopiedSlug] = useState(false);
 
   const totalConfirmedSlots = barbers.reduce(
     (acc, b) => acc + b.confirmed_appointments_count,
@@ -101,6 +113,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
     e.preventDefault();
     setError(null);
     setSuccessMsg(null);
+    setCreatedBarberSlug(null);
     const cleanDni = dni.replace(/\D/g, '');
     const cleanShopName = shopName.trim();
     if (!cleanShopName) {
@@ -114,7 +127,7 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
 
     setCreating(true);
     try {
-      await onCreateBarber({
+      const created = await onCreateBarber({
         dni: cleanDni,
         password,
         name: name.trim(),
@@ -124,8 +137,10 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
         slug: dynamicSlug || undefined,
         address: address.trim() || undefined,
       });
+      const finalSlug = created?.slug || dynamicSlug;
+      setCreatedBarberSlug(finalSlug);
       setSuccessMsg(
-        `Barbería "${cleanShopName}" creada correctamente con link público /${dynamicSlug}`,
+        `Barbería "${created?.shop_name || cleanShopName}" creada exitosamente con link público /${finalSlug}`,
       );
       setDni('');
       setPassword('');
@@ -144,6 +159,27 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
 
   return (
     <div className="pb-16 space-y-6">
+      <div className="flex items-center justify-between gap-3 p-4 rounded-sm bg-[#121214] border border-[#242428]">
+        <div>
+          <span className="font-mono-code text-[10px] uppercase tracking-widest text-[#D49A2A] block">
+            CONTROL CENTRAL DE LA PLATAFORMA
+          </span>
+          <h1 className="font-display text-base font-extrabold uppercase tracking-wider text-[#F2EFE9]">
+            PANEL SUPERADMIN
+          </h1>
+        </div>
+        {onLogout && (
+          <button
+            type="button"
+            onClick={onLogout}
+            className="min-h-[40px] px-3.5 rounded-sm bg-[#0A0A0B] border border-[#C85A32] hover:bg-[#C85A32]/15 text-[#F2EFE9] font-display text-xs uppercase font-bold tracking-wider flex items-center gap-2 transition-colors cursor-pointer"
+          >
+            <LogOut className="w-4 h-4 text-[#C85A32]" />
+            <span>Cerrar Sesión</span>
+          </button>
+        )}
+      </div>
+
       {/* Monetization KPI Strip */}
       <section className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div className="p-4 rounded-sm bg-[#0F172A] border border-[#1E293B]">
@@ -427,8 +463,61 @@ export const SuperAdminView: React.FC<SuperAdminViewProps> = ({
             )}
 
             {successMsg && (
-              <div className="p-3 rounded-sm bg-[#0A0A0B] border border-[#D49A2A] font-mono-code text-xs text-[#D49A2A]">
-                {successMsg}
+              <div className="p-3.5 rounded-sm bg-[#0A0A0B] border border-[#D49A2A] space-y-2.5">
+                <p className="font-mono-code text-xs text-[#D49A2A] font-semibold">
+                  {successMsg}
+                </p>
+                {createdBarberSlug && (
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-1">
+                    <span className="font-mono-code text-xs text-[#F2EFE9] bg-[#121214] px-3 py-1.5 rounded-sm border border-[#242428] select-all truncate">
+                      {typeof window !== 'undefined'
+                        ? `${window.location.origin}/${createdBarberSlug}`
+                        : `/${createdBarberSlug}`}
+                    </span>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const fullUrl =
+                            typeof window !== 'undefined'
+                              ? `${window.location.origin}/${createdBarberSlug}`
+                              : `/${createdBarberSlug}`;
+                          await navigator.clipboard
+                            .writeText(fullUrl)
+                            .catch(() => {});
+                          setCopiedSlug(true);
+                          setTimeout(() => setCopiedSlug(false), 2000);
+                        }}
+                        className="min-h-[34px] px-3 rounded-sm bg-[#D49A2A] text-[#0A0A0B] font-display text-[11px] uppercase font-extrabold tracking-wider inline-flex items-center gap-1.5 cursor-pointer"
+                      >
+                        {copiedSlug ? (
+                          <>
+                            <Check className="w-3.5 h-3.5" />
+                            <span>¡Copiado!</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3.5 h-3.5" />
+                            <span>Copiar Link</span>
+                          </>
+                        )}
+                      </button>
+
+                      {onOpenBarberPublicSlug && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onOpenBarberPublicSlug(createdBarberSlug)
+                          }
+                          className="min-h-[34px] px-3 rounded-sm bg-[#121214] border border-[#242428] hover:border-[#D49A2A] text-[#F2EFE9] font-display text-[11px] uppercase font-bold tracking-wider inline-flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5 text-[#D49A2A]" />
+                          <span>Abrir Link</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
