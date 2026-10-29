@@ -1,8 +1,8 @@
 import { CreatePreferenceDto } from './dto/create-preference.dto';
-import { MercadoPagoWebhookDto } from './dto/mp-webhook.dto';
 import { PaymentsService } from './payments.service';
 export declare class PaymentsController {
     private readonly paymentsService;
+    private readonly logger;
     constructor(paymentsService: PaymentsService);
     createPreference(dto: CreatePreferenceDto): Promise<{
         init_point: string;
@@ -11,11 +11,14 @@ export declare class PaymentsController {
         slot_id: string;
         deposit_amount: number;
     }>;
-    handleMercadoPagoWebhook(dto: MercadoPagoWebhookDto, query: Record<string, string | undefined>): Promise<{
+    handleWebhook(body: Record<string, any>, query: Record<string, any>): Promise<{
+        received: boolean;
         idempotent: boolean;
         status: import(".prisma/client").$Enums.SlotStatus;
         slot_id: string;
         mp_payment_id: string;
+        simulated?: undefined;
+        error?: undefined;
         processed?: undefined;
         reason?: undefined;
         deposit_amount?: undefined;
@@ -30,12 +33,15 @@ export declare class PaymentsController {
         email_notified?: undefined;
         email_mode?: undefined;
     } | {
-        processed: boolean;
-        status: string;
-        reason: string;
-        mp_payment_id: string;
-        slot_id: string | undefined;
+        received: boolean;
+        error: string;
+        simulated?: undefined;
         idempotent?: undefined;
+        status?: undefined;
+        slot_id?: undefined;
+        mp_payment_id?: undefined;
+        processed?: undefined;
+        reason?: undefined;
         deposit_amount?: undefined;
         start_time?: undefined;
         end_time?: undefined;
@@ -48,6 +54,28 @@ export declare class PaymentsController {
         email_notified?: undefined;
         email_mode?: undefined;
     } | {
+        received: boolean;
+        processed: boolean;
+        status: string;
+        reason: string;
+        mp_payment_id: string;
+        slot_id: string | undefined;
+        simulated?: undefined;
+        idempotent?: undefined;
+        error?: undefined;
+        deposit_amount?: undefined;
+        start_time?: undefined;
+        end_time?: undefined;
+        barber_phone?: undefined;
+        shop_name?: undefined;
+        reminder_enqueued?: undefined;
+        reminder_id?: undefined;
+        reminder_message?: undefined;
+        reminder_scheduled_for?: undefined;
+        email_notified?: undefined;
+        email_mode?: undefined;
+    } | {
+        received: boolean;
         processed: boolean;
         slot_id: string;
         status: import(".prisma/client").$Enums.SlotStatus;
@@ -63,7 +91,12 @@ export declare class PaymentsController {
         reminder_scheduled_for: string | null;
         email_notified: boolean;
         email_mode: "SMTP" | "CONSOLE_FALLBACK";
+        simulated?: undefined;
         idempotent?: undefined;
+        error?: undefined;
         reason?: undefined;
+    } | {
+        received: boolean;
+        simulated: boolean;
     }>;
 }

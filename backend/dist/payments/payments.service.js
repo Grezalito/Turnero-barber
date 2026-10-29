@@ -205,32 +205,42 @@ let PaymentsService = PaymentsService_1 = class PaymentsService {
             is_sandbox_local: false,
         };
     }
-    async handleWebhook(dto, query) {
-        const rawPaymentId = dto.payment_id ||
-            dto.data?.id ||
-            query['data.id'] ||
-            query['id'] ||
-            undefined;
-        if (!rawPaymentId) {
-            throw new common_1.BadRequestException('Falta el identificador de pago (payment_id o data.id) en el webhook');
+    async handleWebhook(body = {}, query = {}) {
+        const rawPaymentId = body?.data?.id ||
+            query?.['data.id'] ||
+            body?.id ||
+            query?.id ||
+            body?.payment_id;
+        const paymentId = rawPaymentId !== undefined && rawPaymentId !== null
+            ? String(rawPaymentId)
+            : undefined;
+        const eventType = body?.type || query?.type || body?.action || query?.topic || 'unknown';
+        this.logger.log(`Webhook MP recibido: type=${eventType}, id=${paymentId}`);
+        if (!paymentId || paymentId === '123456') {
+            return { received: true, simulated: true };
         }
-        const mpPaymentId = String(rawPaymentId);
+        const mpPaymentId = paymentId;
         const alreadyProcessedSlot = await this.prisma.appointmentSlot.findUnique({
             where: { mp_payment_id: mpPaymentId },
         });
         if (alreadyProcessedSlot) {
             this.logger.log(`[Idempotencia] Pago mp_payment_id=${mpPaymentId} ya fue procesado para el slot ${alreadyProcessedSlot.id}`);
             return {
+                received: true,
                 idempotent: true,
                 status: alreadyProcessedSlot.status,
                 slot_id: alreadyProcessedSlot.id,
                 mp_payment_id: mpPaymentId,
             };
         }
-        const paymentDetails = await this.resolvePaymentDetails(mpPaymentId, dto);
+        const paymentDetails = await this.resolvePaymentDetails(mpPaymentId, body);
+        if (!paymentDetails) {
+            return { received: true, error: 'Payment not found or simulated' };
+        }
         if (paymentDetails.status !== 'approved') {
             this.logger.log(`Pago ${mpPaymentId} recibido con estado "${paymentDetails.status}" (no aprobado). Ignorando confirmación.`);
             return {
+                received: true,
                 processed: false,
                 status: paymentDetails.status,
                 reason: `Estado de pago no aprobado (${paymentDetails.status})`,
@@ -239,7 +249,8 @@ let PaymentsService = PaymentsService_1 = class PaymentsService {
             };
         }
         if (!paymentDetails.externalReference) {
-            throw new common_1.BadRequestException(`El pago ${mpPaymentId} no posee external_reference (slotId)`);
+            this.logger.warn(`El pago ${mpPaymentId} está aprobado pero no posee external_reference (slotId). Ignorando.`);
+            return { received: true, error: 'Payment not found or simulated' };
         }
         const confirmedSlot = await this.prisma.$transaction(async (tx) => {
             const slot = await tx.appointmentSlot.findUnique({
@@ -252,7 +263,7 @@ let PaymentsService = PaymentsService_1 = class PaymentsService {
                 },
             });
             if (!slot) {
-                throw new common_1.NotFoundException(`No existe el turno (slot) con id ${paymentDetails.externalReference}`);
+                return null;
             }
             if (slot.status === client_1.SlotStatus.CONFIRMED) {
                 return slot;
@@ -273,6 +284,10 @@ let PaymentsService = PaymentsService_1 = class PaymentsService {
                 },
             });
         });
+        if (!confirmedSlot) {
+            this.logger.warn(`No existe el turno (slot) con id ${paymentDetails.externalReference} para el pago ${mpPaymentId}`);
+            return { received: true, error: 'Payment not found or simulated' };
+        }
         let reminderRecord = null;
         if (confirmedSlot.barber.reminder_addon_active) {
             reminderRecord = await this.reminderProvider.scheduleForConfirmedSlot({
@@ -301,6 +316,7 @@ let PaymentsService = PaymentsService_1 = class PaymentsService {
             depositAmountArs: confirmedSlot.deposit_amount,
         });
         return {
+            received: true,
             processed: true,
             slot_id: confirmedSlot.id,
             status: confirmedSlot.status,
@@ -320,29 +336,46 @@ let PaymentsService = PaymentsService_1 = class PaymentsService {
             email_mode: emailResult.mode,
         };
     }
-    async resolvePaymentDetails(mpPaymentId, dto) {
-        const mpAccessToken = this.configService.get('MP_ACCESS_TOKEN') || '';
+    async resolvePaymentDetails(mpPaymentId, body) {
+        const mpAccessToken = (this.configService.get('MP_ACCESS_TOKEN') || '').trim();
         const isPlaceholderToken = !mpAccessToken ||
             mpAccessToken.includes('CENTRAL-PLATFORM-TOKEN') ||
             mpAccessToken === 'TEST-000000';
-        if (!isPlaceholderToken && !dto.external_reference) {
+        if (body?.external_reference && body?.status) {
+            return {
+                status: String(body.status),
+                externalReference: String(body.external_reference),
+            };
+        }
+        if (isPlaceholderToken) {
+            this.logger.warn(`No hay MP_ACCESS_TOKEN válido para consultar el pago ${mpPaymentId} en Mercado Pago.`);
+            return null;
+        }
+        try {
             const response = await fetch(`https://api.mercadopago.com/v1/payments/${encodeURIComponent(mpPaymentId)}`, {
                 headers: {
                     Authorization: `Bearer ${mpAccessToken}`,
                 },
             });
-            if (response.ok) {
-                const paymentData = (await response.json());
-                return {
-                    status: paymentData.status,
-                    externalReference: paymentData.external_reference,
-                };
+            if (!response.ok) {
+                const errorBody = await response.text().catch(() => '');
+                this.logger.warn(`Consulta de pago MP ${mpPaymentId} devolvió status ${response.status}: ${errorBody}`);
+                return null;
             }
+            const paymentData = (await response.json());
+            if (!paymentData || !paymentData.status) {
+                this.logger.warn(`Respuesta de MP para pago ${mpPaymentId} no contiene status válido.`);
+                return null;
+            }
+            return {
+                status: paymentData.status,
+                externalReference: paymentData.external_reference,
+            };
         }
-        return {
-            status: dto.status || 'approved',
-            externalReference: dto.external_reference,
-        };
+        catch (error) {
+            this.logger.warn(`Error consultando pago ${mpPaymentId} en Mercado Pago: ${error.message}`);
+            return null;
+        }
     }
 };
 exports.PaymentsService = PaymentsService;
