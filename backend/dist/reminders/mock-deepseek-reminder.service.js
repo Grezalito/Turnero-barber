@@ -13,6 +13,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.MockDeepSeekReminderService = void 0;
 const common_1 = require("@nestjs/common");
 const prisma_service_1 = require("../prisma/prisma.service");
+const pii_sanitizer_util_1 = require("../security/pii-sanitizer.util");
 let MockDeepSeekReminderService = MockDeepSeekReminderService_1 = class MockDeepSeekReminderService {
     constructor(prisma) {
         this.prisma = prisma;
@@ -26,17 +27,19 @@ let MockDeepSeekReminderService = MockDeepSeekReminderService_1 = class MockDeep
         const hh = String(payload.startTime.getUTCHours()).padStart(2, '0');
         const mm = String(payload.startTime.getUTCMinutes()).padStart(2, '0');
         const dateStr = payload.startTime.toISOString().slice(0, 10);
-        const mockMessage = `[MOCK DeepSeek IA] Hola ${payload.clientName}, te recordamos tu turno de 30 min en ${payload.shopName} el ${dateStr} a las ${hh}:${mm} hs. Seña de $2.000 ARS acreditada.`;
+        const safeClientName = (0, pii_sanitizer_util_1.sanitizeControlChars)(payload.clientName);
+        const safeShopName = (0, pii_sanitizer_util_1.sanitizeControlChars)(payload.shopName);
+        const mockMessage = `[MOCK DeepSeek IA] Hola ${safeClientName}, te recordamos tu turno de 30 min en ${safeShopName} el ${dateStr} a las ${hh}:${mm} hs. Seña de $2.000 ARS acreditada.`;
         const createdReminder = await this.prisma.reminderQueue.create({
             data: {
                 slot_id: payload.slotId,
                 barber_id: payload.barberId,
-                client_phone: payload.clientPhone || '+5491100000000',
+                client_phone: (0, pii_sanitizer_util_1.sanitizeControlChars)(payload.clientPhone) || '+5491100000000',
                 scheduled_for: scheduledFor,
                 generated_message: mockMessage,
             },
         });
-        this.logger.log(`[DeepSeek Stub] Turno CONFIRMED (${payload.slotId}) -> Recordatorio encolado para ${createdReminder.client_phone} (barber_id=${payload.barberId}): "${mockMessage}"`);
+        this.logger.log(`[DeepSeek Stub] Turno CONFIRMED (${payload.slotId}) -> Recordatorio encolado para ${(0, pii_sanitizer_util_1.maskPhone)(createdReminder.client_phone)} (barber_id=${payload.barberId})`);
         return createdReminder;
     }
 };

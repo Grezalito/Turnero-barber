@@ -226,8 +226,32 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
         );
       }
 
+      // Validación anti-Open Redirect (ISO 27001 A.8.26): verificar que init_point apunte exclusivamente a dominios oficiales de Mercado Pago (o localhost en dev)
+      const parsedCheckoutUrl = new URL(data.init_point);
+      const allowedMpHost =
+        parsedCheckoutUrl.protocol === 'https:' &&
+        (parsedCheckoutUrl.hostname.endsWith('.mercadopago.com') ||
+          parsedCheckoutUrl.hostname.endsWith('.mercadopago.com.ar') ||
+          parsedCheckoutUrl.hostname.endsWith('.mercadopago.cl') ||
+          parsedCheckoutUrl.hostname.endsWith('.mercadopago.com.mx') ||
+          parsedCheckoutUrl.hostname.endsWith('.mercadolivre.com'));
+      const allowedDevHost =
+        import.meta.env.DEV &&
+        (parsedCheckoutUrl.hostname === 'localhost' ||
+          parsedCheckoutUrl.hostname === '127.0.0.1');
+
+      if (!allowedMpHost && !allowedDevHost) {
+        throw new Error(
+          'Por seguridad se bloqueó una redirección hacia un dominio de pago no verificado.',
+        );
+      }
+
+      // Limpiar PII de memoria del formulario antes de abandonar la página (ISO 27701 Minimización)
+      setConfirmDni('');
+      setConfirmPhone('');
+
       // Redirección nativa inmediata en la misma ventana a Mercado Pago
-      window.location.href = data.init_point;
+      window.location.href = parsedCheckoutUrl.toString();
     } catch (err) {
       const message = (err as Error).message || '';
 

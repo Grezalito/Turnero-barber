@@ -18,6 +18,11 @@ import {
   PLATFORM_DEPOSIT_ARS,
 } from '../payments/payments.service';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  maskDni,
+  maskFullNameForPublicArtifact,
+  sanitizeControlChars,
+} from '../security/pii-sanitizer.util';
 import { LockSlotDto } from './dto/lock-slot.dto';
 import { ManageBarberSlotsDto } from './dto/manage-slots.dto';
 import {
@@ -372,17 +377,22 @@ export class AppointmentsService {
       throw new NotFoundException(`No se encontró el turno con ID ${slotId}`);
     }
 
+    // En artefactos públicos no autenticados (.ICS), aplicamos minimización y enmascaramiento de PII (ISO/IEC 27701 7.4.5 / ISO 27001 A.8.11)
+    const maskedPaymentId = slot.mp_payment_id
+      ? `***${String(slot.mp_payment_id).slice(-4)}`
+      : 'PENDIENTE';
+
     const icsContent = this.mailService.buildIcsCalendar({
       slotId: slot.id,
       shopName: slot.barber.shop_name,
       barberName: slot.barber.user.name,
       barberPhone: slot.barber.user.phone,
       address: slot.barber.address,
-      clientName: slot.client?.name || 'Cliente',
-      clientDni: slot.client?.dni || 'S/D',
+      clientName: maskFullNameForPublicArtifact(slot.client?.name),
+      clientDni: maskDni(slot.client?.dni),
       startTime: slot.start_time,
       endTime: slot.end_time,
-      mpPaymentId: slot.mp_payment_id || 'PENDIENTE',
+      mpPaymentId: maskedPaymentId,
       depositAmountArs: slot.deposit_amount,
     });
 
@@ -464,7 +474,7 @@ export class AppointmentsService {
     });
 
     this.logger.log(
-      `🚫 Turno ${slot.id} cancelado por usuario ${user.dni}. Seña retenida: ${hadPaidDeposit ? `$${slot.deposit_amount} ARS` : '$0 ARS'} (NO REEMBOLSABLE - Sin llamada a refund de Mercado Pago).`,
+      `[SECURITY_AUDIT] event=APPOINTMENT_CANCELLED_NO_REFUND slotId=${slot.id} actorDni=${maskDni(user.dni)} actorRole=${user.role} depositRetainedArs=${hadPaidDeposit ? slot.deposit_amount : 0}`,
     );
 
     return {
@@ -550,8 +560,19 @@ export class AppointmentsService {
   async getPublicAvailableSlotsBySlug(slug: string) {
     await this.releaseExpiredLocks();
 
+    const safeSlug = sanitizeControlChars(slug)
+      .toLowerCase()
+      .replace(/[^a-z0-9-_]/g, '')
+      .slice(0, 64);
+
+    if (!safeSlug) {
+      throw new NotFoundException(
+        'No se encontró la barbería solicitada',
+      );
+    }
+
     const barber = await this.prisma.barberProfile.findUnique({
-      where: { slug },
+      where: { slug: safeSlug },
       include: {
         user: {
           select: { name: true, phone: true },
@@ -561,7 +582,7 @@ export class AppointmentsService {
 
     if (!barber) {
       throw new NotFoundException(
-        `No se encontró ninguna barbería con el identificador "${slug}"`,
+        `No se encontró ninguna barbería con el identificador "${safeSlug}"`,
       );
     }
 

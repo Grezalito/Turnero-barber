@@ -14,6 +14,7 @@ exports.MailService = void 0;
 const common_1 = require("@nestjs/common");
 const config_1 = require("@nestjs/config");
 const nodemailer = require("nodemailer");
+const pii_sanitizer_util_1 = require("../security/pii-sanitizer.util");
 let MailService = MailService_1 = class MailService {
     constructor(configService) {
         this.configService = configService;
@@ -140,7 +141,7 @@ let MailService = MailService_1 = class MailService {
                     subject: barberSubject,
                     text: barberText,
                 });
-                this.logger.log(`📧 Emails SMTP enviados a cliente (${clientRecipient}) con .ics adjunto y barbero (${barberRecipient})`);
+                this.logger.log(`📧 Emails SMTP enviados a cliente (${(0, pii_sanitizer_util_1.maskEmail)(clientRecipient)}) con .ics adjunto y barbero (${(0, pii_sanitizer_util_1.maskEmail)(barberRecipient)})`);
                 return {
                     clientEmailSent: true,
                     barberEmailSent: true,
@@ -148,21 +149,26 @@ let MailService = MailService_1 = class MailService {
                 };
             }
             catch (err) {
-                this.logger.warn(`Fallo envío SMTP (${err.message}), ejecutando fallback a console.log`);
+                this.logger.warn(`Fallo envío SMTP (${err.message}), ejecutando fallback seguro`);
             }
         }
-        console.log('\n============================================================');
-        console.log('📧 [MailService Fallback - Desarrollo] COMPROBANTE AL CLIENTE');
-        console.log(`Para: ${clientRecipient}`);
-        console.log(`Asunto: ${clientSubject}`);
-        console.log(`Adjunto: turno-${payload.slotId.slice(0, 8)}.ics (${icsContent.length} bytes)`);
-        console.log(clientText);
-        console.log('------------------------------------------------------------');
-        console.log('📧 [MailService Fallback - Desarrollo] AVISO AL BARBERO');
-        console.log(`Para: ${barberRecipient}`);
-        console.log(`Asunto: ${barberSubject}`);
-        console.log(barberText);
-        console.log('============================================================\n');
+        const isProd = (this.configService.get('NODE_ENV') || '').toLowerCase() ===
+            'production';
+        if (isProd) {
+            this.logger.log(`[SECURITY_AUDIT] event=MAIL_FALLBACK_REDACTED slotId=${payload.slotId} clientDni=${(0, pii_sanitizer_util_1.maskDni)(payload.clientDni)} clientEmail=${(0, pii_sanitizer_util_1.maskEmail)(clientRecipient)}`);
+        }
+        else {
+            console.log('\n============================================================');
+            console.log('📧 [MailService Fallback - Desarrollo] COMPROBANTE AL CLIENTE');
+            console.log(`Para: ${(0, pii_sanitizer_util_1.maskEmail)(clientRecipient)}`);
+            console.log(`Asunto: ${clientSubject}`);
+            console.log(`Adjunto: turno-${payload.slotId.slice(0, 8)}.ics (${icsContent.length} bytes)`);
+            console.log('------------------------------------------------------------');
+            console.log('📧 [MailService Fallback - Desarrollo] AVISO AL BARBERO');
+            console.log(`Para: ${(0, pii_sanitizer_util_1.maskEmail)(barberRecipient)}`);
+            console.log(`Asunto: Nuevo Turno Señado (${dateStr} ${startHhMm} hs) - Cliente DNI ${(0, pii_sanitizer_util_1.maskDni)(payload.clientDni)}`);
+            console.log('============================================================\n');
+        }
         return {
             clientEmailSent: true,
             barberEmailSent: true,
@@ -170,7 +176,10 @@ let MailService = MailService_1 = class MailService {
         };
     }
     escapeIcsText(text) {
-        return text.replace(/,/g, '\\,').replace(/;/g, '\\;');
+        return (0, pii_sanitizer_util_1.sanitizeControlChars)(text)
+            .replace(/\\/g, '\\\\')
+            .replace(/,/g, '\\,')
+            .replace(/;/g, '\\;');
     }
 };
 exports.MailService = MailService;

@@ -229,7 +229,10 @@ export declare class PaymentsService {
         reminder_message?: undefined;
         reminder_scheduled_for?: undefined;
     }>;
-    handleWebhook(body?: Record<string, any>, query?: Record<string, any>): Promise<{
+    handleWebhook(body?: Record<string, any>, query?: Record<string, any>, signatureHeaders?: {
+        xSignature?: string;
+        xRequestId?: string;
+    }): Promise<{
         received: boolean;
         simulated: boolean;
         processed?: undefined;
@@ -363,4 +366,5 @@ export declare class PaymentsService {
         idempotent?: undefined;
     }>;
     private resolvePaymentDetails;
+    private verifyMercadoPagoWebhookSignature;
 }

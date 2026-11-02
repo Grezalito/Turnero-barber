@@ -1,6 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
+import {
+  maskDni,
+  maskEmail,
+  sanitizeControlChars,
+} from '../security/pii-sanitizer.util';
 
 export interface IcsAppointmentPayload {
   slotId: string;
@@ -187,7 +192,7 @@ export class MailService {
         });
 
         this.logger.log(
-          `📧 Emails SMTP enviados a cliente (${clientRecipient}) con .ics adjunto y barbero (${barberRecipient})`,
+          `📧 Emails SMTP enviados a cliente (${maskEmail(clientRecipient)}) con .ics adjunto y barbero (${maskEmail(barberRecipient)})`,
         );
 
         return {
@@ -197,24 +202,33 @@ export class MailService {
         };
       } catch (err) {
         this.logger.warn(
-          `Fallo envío SMTP (${(err as Error).message}), ejecutando fallback a console.log`,
+          `Fallo envío SMTP (${(err as Error).message}), ejecutando fallback seguro`,
         );
       }
     }
 
-    // Fallback en desarrollo: console.log estructurado
-    console.log('\n============================================================');
-    console.log('📧 [MailService Fallback - Desarrollo] COMPROBANTE AL CLIENTE');
-    console.log(`Para: ${clientRecipient}`);
-    console.log(`Asunto: ${clientSubject}`);
-    console.log(`Adjunto: turno-${payload.slotId.slice(0, 8)}.ics (${icsContent.length} bytes)`);
-    console.log(clientText);
-    console.log('------------------------------------------------------------');
-    console.log('📧 [MailService Fallback - Desarrollo] AVISO AL BARBERO');
-    console.log(`Para: ${barberRecipient}`);
-    console.log(`Asunto: ${barberSubject}`);
-    console.log(barberText);
-    console.log('============================================================\n');
+    const isProd =
+      (this.configService.get<string>('NODE_ENV') || '').toLowerCase() ===
+      'production';
+
+    if (isProd) {
+      // En producción, jamás volcar cuerpos de correo ni PII en texto plano a stdout (ISO 27701 / ISO 27001 A.8.15)
+      this.logger.log(
+        `[SECURITY_AUDIT] event=MAIL_FALLBACK_REDACTED slotId=${payload.slotId} clientDni=${maskDni(payload.clientDni)} clientEmail=${maskEmail(clientRecipient)}`,
+      );
+    } else {
+      // Fallback en desarrollo: console.log estructurado con DNI enmascarado
+      console.log('\n============================================================');
+      console.log('📧 [MailService Fallback - Desarrollo] COMPROBANTE AL CLIENTE');
+      console.log(`Para: ${maskEmail(clientRecipient)}`);
+      console.log(`Asunto: ${clientSubject}`);
+      console.log(`Adjunto: turno-${payload.slotId.slice(0, 8)}.ics (${icsContent.length} bytes)`);
+      console.log('------------------------------------------------------------');
+      console.log('📧 [MailService Fallback - Desarrollo] AVISO AL BARBERO');
+      console.log(`Para: ${maskEmail(barberRecipient)}`);
+      console.log(`Asunto: Nuevo Turno Señado (${dateStr} ${startHhMm} hs) - Cliente DNI ${maskDni(payload.clientDni)}`);
+      console.log('============================================================\n');
+    }
 
     return {
       clientEmailSent: true,
@@ -224,6 +238,9 @@ export class MailService {
   }
 
   private escapeIcsText(text: string): string {
-    return text.replace(/,/g, '\\,').replace(/;/g, '\\;');
+    return sanitizeControlChars(text)
+      .replace(/\\/g, '\\\\')
+      .replace(/,/g, '\\,')
+      .replace(/;/g, '\\;');
   }
 }

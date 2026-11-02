@@ -17,6 +17,7 @@ const mail_module_1 = require("./mail/mail.module");
 const payments_module_1 = require("./payments/payments.module");
 const prisma_module_1 = require("./prisma/prisma.module");
 const reminders_module_1 = require("./reminders/reminders.module");
+const security_module_1 = require("./security/security.module");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -29,6 +30,7 @@ exports.AppModule = AppModule = __decorate([
             }),
             schedule_1.ScheduleModule.forRoot(),
             prisma_module_1.PrismaModule,
+            security_module_1.SecurityModule,
             mail_module_1.MailModule,
             auth_module_1.AuthModule,
             admin_module_1.AdminModule,

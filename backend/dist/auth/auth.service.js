@@ -8,18 +8,28 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
+var AuthService_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AuthService = void 0;
 const common_1 = require("@nestjs/common");
 const jwt_1 = require("@nestjs/jwt");
 const client_1 = require("@prisma/client");
 const bcrypt = require("bcrypt");
+const crypto = require("crypto");
 const admin_service_1 = require("../admin/admin.service");
 const prisma_service_1 = require("../prisma/prisma.service");
-let AuthService = class AuthService {
+const pii_sanitizer_util_1 = require("../security/pii-sanitizer.util");
+const TIMING_SAFE_DUMMY_BCRYPT_HASH = '$2b$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy';
+let AuthService = AuthService_1 = class AuthService {
     constructor(prisma, jwtService) {
         this.prisma = prisma;
         this.jwtService = jwtService;
+        this.logger = new common_1.Logger(AuthService_1.name);
+    }
+    timingSafeStringEqual(a, b) {
+        const hashA = crypto.createHash('sha256').update(String(a)).digest();
+        const hashB = crypto.createHash('sha256').update(String(b)).digest();
+        return crypto.timingSafeEqual(hashA, hashB);
     }
     async ensureUniqueSlug(rawSource) {
         const baseSlug = (0, admin_service_1.generateSlug)(rawSource) ||
@@ -44,9 +54,13 @@ let AuthService = class AuthService {
     }
     async login(dto) {
         const cleanDni = dto.dni.replace(/\D/g, '');
-        const superAdminDni = process.env.SUPERADMIN_DNI || '00000000';
-        const superAdminPassword = process.env.SUPERADMIN_PASSWORD || 'adminPassword123!';
-        if (cleanDni === superAdminDni && dto.password === superAdminPassword) {
+        const isProd = (process.env.NODE_ENV || '').toLowerCase() === 'production';
+        const superAdminDni = (process.env.SUPERADMIN_DNI || (isProd ? '' : '00000000')).trim();
+        const superAdminPassword = process.env.SUPERADMIN_PASSWORD || (isProd ? '' : 'adminPassword123!');
+        const isSuperAdminMatch = Boolean(superAdminDni && superAdminPassword) &&
+            this.timingSafeStringEqual(cleanDni, superAdminDni) &&
+            this.timingSafeStringEqual(dto.password, superAdminPassword);
+        if (isSuperAdminMatch) {
             const hashedAdminPassword = await bcrypt.hash(superAdminPassword, 10);
             const superAdminUser = await this.prisma.user.upsert({
                 where: { dni: superAdminDni },
@@ -69,6 +83,7 @@ let AuthService = class AuthService {
                 dni: superAdminUser.dni,
                 role: superAdminUser.role,
             };
+            this.logger.log(`[SECURITY_AUDIT] event=AUTH_LOGIN_SUCCESS role=SUPERADMIN dni=${(0, pii_sanitizer_util_1.maskDni)(cleanDni)}`);
             return {
                 access_token: await this.jwtService.signAsync(payload),
                 user: {
@@ -87,10 +102,13 @@ let AuthService = class AuthService {
             include: { barber_profile: true },
         });
         if (!user) {
+            await bcrypt.compare(dto.password, TIMING_SAFE_DUMMY_BCRYPT_HASH);
+            this.logger.warn(`[SECURITY_AUDIT] event=AUTH_LOGIN_FAILED reason=INVALID_CREDENTIALS dni=${(0, pii_sanitizer_util_1.maskDni)(cleanDni)}`);
             throw new common_1.UnauthorizedException('DNI o contraseña incorrectos');
         }
         const isPasswordValid = await bcrypt.compare(dto.password, user.password);
         if (!isPasswordValid) {
+            this.logger.warn(`[SECURITY_AUDIT] event=AUTH_LOGIN_FAILED reason=INVALID_PASSWORD dni=${(0, pii_sanitizer_util_1.maskDni)(cleanDni)} role=${user.role}`);
             throw new common_1.UnauthorizedException('DNI o contraseña incorrectos');
         }
         if (user.role === client_1.Role.BARBER && !user.barber_profile) {
@@ -116,6 +134,7 @@ let AuthService = class AuthService {
             role: user.role,
             slug: user.barber_profile?.slug || undefined,
         };
+        this.logger.log(`[SECURITY_AUDIT] event=AUTH_LOGIN_SUCCESS role=${user.role} dni=${(0, pii_sanitizer_util_1.maskDni)(cleanDni)}`);
         return {
             access_token: await this.jwtService.signAsync(payload),
             user: {
@@ -142,9 +161,9 @@ let AuthService = class AuthService {
             data: {
                 dni: cleanDni,
                 password: hashedPassword,
-                name: dto.name.trim(),
-                phone: dto.phone.trim(),
-                email: dto.email?.trim() || null,
+                name: (0, pii_sanitizer_util_1.sanitizeControlChars)(dto.name),
+                phone: (0, pii_sanitizer_util_1.sanitizeControlChars)(dto.phone),
+                email: dto.email ? (0, pii_sanitizer_util_1.sanitizeControlChars)(dto.email) : null,
                 role: client_1.Role.CLIENT,
             },
         });
@@ -153,6 +172,7 @@ let AuthService = class AuthService {
             dni: user.dni,
             role: user.role,
         };
+        this.logger.log(`[SECURITY_AUDIT] event=CLIENT_REGISTERED dni=${(0, pii_sanitizer_util_1.maskDni)(cleanDni)}`);
         return {
             access_token: await this.jwtService.signAsync(payload),
             user: {
@@ -209,7 +229,7 @@ let AuthService = class AuthService {
     }
 };
 exports.AuthService = AuthService;
-exports.AuthService = AuthService = __decorate([
+exports.AuthService = AuthService = AuthService_1 = __decorate([
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [prisma_service_1.PrismaService,
         jwt_1.JwtService])

@@ -10,12 +10,17 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { Prisma, Role, SlotStatus } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import * as crypto from 'crypto';
 import { MailService } from '../mail/mail.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   IReminderProvider,
   REMINDER_PROVIDER,
 } from '../reminders/reminder.interface';
+import {
+  maskDni,
+  sanitizeControlChars,
+} from '../security/pii-sanitizer.util';
 import { ConfirmReturnDto } from './dto/confirm-return.dto';
 import { CreatePreferenceDto } from './dto/create-preference.dto';
 
@@ -70,6 +75,9 @@ export class PaymentsService {
     const lockedUntil = new Date(now.getTime() + LOCK_DURATION_MS);
 
     // 1. Resolver o crear cliente por DNI (sin sobrescribir cuentas de staff BARBER/SUPERADMIN)
+    const sanitizedName = sanitizeControlChars(dto.clientName);
+    const sanitizedPhone = sanitizeControlChars(dto.clientPhone);
+
     let clientUser = await this.prisma.user.findUnique({
       where: { dni: cleanDni },
     });
@@ -79,22 +87,21 @@ export class PaymentsService {
         clientUser = await this.prisma.user.update({
           where: { id: clientUser.id },
           data: {
-            name: dto.clientName.trim() || clientUser.name,
-            phone: dto.clientPhone.trim() || clientUser.phone,
+            name: sanitizedName || clientUser.name,
+            phone: sanitizedPhone || clientUser.phone,
           },
         });
       }
     } else {
-      const defaultPasswordHash = await bcrypt.hash(
-        cleanDni.padStart(6, '0'),
-        10,
-      );
+      // Secreto aleatorio CSPRNG de 256 bits para cuentas Guest Checkout (ISO 27001 A.8.5 - Prohibición de contraseñas predecibles basadas en DNI)
+      const csprngGuestSecret = crypto.randomBytes(32).toString('hex');
+      const randomPasswordHash = await bcrypt.hash(csprngGuestSecret, 10);
       clientUser = await this.prisma.user.create({
         data: {
           dni: cleanDni,
-          password: defaultPasswordHash,
-          name: dto.clientName.trim(),
-          phone: dto.clientPhone.trim(),
+          password: randomPasswordHash,
+          name: sanitizedName,
+          phone: sanitizedPhone,
           role: Role.CLIENT,
         },
       });
@@ -255,15 +262,17 @@ export class PaymentsService {
       items: [
         {
           id: params.slotId,
-          title: `Seña de Turno (30 min) - ${params.shopName}`,
-          description: `Reserva de turno para DNI ${params.clientDni}`,
+          title: `Seña de Turno (30 min) - ${sanitizeControlChars(params.shopName)}`,
+          description: `Reserva de turno para DNI ${maskDni(params.clientDni)}`,
           quantity: 1,
           currency_id: 'ARS',
           unit_price: PLATFORM_DEPOSIT_ARS,
         },
       ],
       payer: {
-        name: params.clientName || `Cliente DNI ${params.clientDni}`,
+        name:
+          sanitizeControlChars(params.clientName) ||
+          `Cliente DNI ${maskDni(params.clientDni)}`,
         identification: {
           type: 'DNI',
           number: params.clientDni,
@@ -469,6 +478,7 @@ export class PaymentsService {
   async handleWebhook(
     body: Record<string, any> = {},
     query: Record<string, any> = {},
+    signatureHeaders?: { xSignature?: string; xRequestId?: string },
   ) {
     const rawPaymentId =
       body?.data?.id ||
@@ -478,15 +488,41 @@ export class PaymentsService {
       body?.payment_id;
     const paymentId =
       rawPaymentId !== undefined && rawPaymentId !== null
-        ? String(rawPaymentId).trim()
+        ? sanitizeControlChars(String(rawPaymentId))
         : undefined;
-    const eventType =
-      body?.type || query?.type || body?.action || query?.topic || 'unknown';
+    const eventType = sanitizeControlChars(
+      String(
+        body?.type || query?.type || body?.action || query?.topic || 'unknown',
+      ),
+    );
 
     this.logger.log(`Webhook MP recibido: type=${eventType}, id=${paymentId}`);
 
     if (!paymentId || paymentId === '123456') {
       return { received: true, simulated: true };
+    }
+
+    // Verificación criptográfica HMAC-SHA256 de firma de Webhook si MP_WEBHOOK_SECRET está configurado (ISO 27001 A.8.24 / SOC 2 CC6.6)
+    const webhookSecret = (
+      this.configService.get<string>('MP_WEBHOOK_SECRET') || ''
+    ).trim();
+    if (webhookSecret && signatureHeaders?.xSignature) {
+      const isValidSig = this.verifyMercadoPagoWebhookSignature(
+        paymentId,
+        signatureHeaders.xSignature,
+        signatureHeaders.xRequestId,
+        webhookSecret,
+      );
+      if (!isValidSig) {
+        this.logger.warn(
+          `[SECURITY_AUDIT] event=WEBHOOK_SIGNATURE_INVALID paymentId=${paymentId}`,
+        );
+        return {
+          received: true,
+          processed: false,
+          error: 'Invalid webhook signature',
+        };
+      }
     }
 
     const mpPaymentId = paymentId;
@@ -802,6 +838,46 @@ export class PaymentsService {
         `Error consultando pago ${mpPaymentId} en Mercado Pago: ${(error as Error).message}`,
       );
       return null;
+    }
+  }
+
+  /**
+   * Valida la firma HMAC-SHA256 enviada por Mercado Pago en la cabecera `x-signature` (formato: ts=...,v1=...)
+   * en tiempo constante (`crypto.timingSafeEqual`).
+   */
+  private verifyMercadoPagoWebhookSignature(
+    dataId: string,
+    xSignature: string,
+    xRequestId: string | undefined,
+    secret: string,
+  ): boolean {
+    try {
+      const parts = xSignature.split(',');
+      let ts = '';
+      let v1 = '';
+      for (const part of parts) {
+        const [k, v] = part.split('=').map((s) => s.trim());
+        if (k === 'ts') ts = v || '';
+        if (k === 'v1') v1 = v || '';
+      }
+      if (!ts || !v1) {
+        return false;
+      }
+
+      const manifest = `id:${dataId.toLowerCase()};${xRequestId ? `request-id:${xRequestId};` : ''}ts:${ts};`;
+      const expectedHex = crypto
+        .createHmac('sha256', secret)
+        .update(manifest)
+        .digest('hex');
+
+      const bufA = Buffer.from(v1, 'hex');
+      const bufB = Buffer.from(expectedHex, 'hex');
+      if (bufA.length !== bufB.length || bufA.length === 0) {
+        return false;
+      }
+      return crypto.timingSafeEqual(bufA, bufB);
+    } catch {
+      return false;
     }
   }
 }

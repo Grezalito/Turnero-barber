@@ -18,9 +18,11 @@ const common_1 = require("@nestjs/common");
 const config_1 = require("@nestjs/config");
 const client_1 = require("@prisma/client");
 const bcrypt = require("bcrypt");
+const crypto = require("crypto");
 const mail_service_1 = require("../mail/mail.service");
 const prisma_service_1 = require("../prisma/prisma.service");
 const reminder_interface_1 = require("../reminders/reminder.interface");
+const pii_sanitizer_util_1 = require("../security/pii-sanitizer.util");
 exports.PLATFORM_DEPOSIT_ARS = 2000;
 exports.SLOT_DURATION_MS = 30 * 60 * 1000;
 exports.LOCK_DURATION_MS = 10 * 60 * 1000;
@@ -41,6 +43,8 @@ let PaymentsService = PaymentsService_1 = class PaymentsService {
         const cleanDni = dto.clientDni.replace(/\D/g, '');
         const now = new Date();
         const lockedUntil = new Date(now.getTime() + exports.LOCK_DURATION_MS);
+        const sanitizedName = (0, pii_sanitizer_util_1.sanitizeControlChars)(dto.clientName);
+        const sanitizedPhone = (0, pii_sanitizer_util_1.sanitizeControlChars)(dto.clientPhone);
         let clientUser = await this.prisma.user.findUnique({
             where: { dni: cleanDni },
         });
@@ -49,20 +53,21 @@ let PaymentsService = PaymentsService_1 = class PaymentsService {
                 clientUser = await this.prisma.user.update({
                     where: { id: clientUser.id },
                     data: {
-                        name: dto.clientName.trim() || clientUser.name,
-                        phone: dto.clientPhone.trim() || clientUser.phone,
+                        name: sanitizedName || clientUser.name,
+                        phone: sanitizedPhone || clientUser.phone,
                     },
                 });
             }
         }
         else {
-            const defaultPasswordHash = await bcrypt.hash(cleanDni.padStart(6, '0'), 10);
+            const csprngGuestSecret = crypto.randomBytes(32).toString('hex');
+            const randomPasswordHash = await bcrypt.hash(csprngGuestSecret, 10);
             clientUser = await this.prisma.user.create({
                 data: {
                     dni: cleanDni,
-                    password: defaultPasswordHash,
-                    name: dto.clientName.trim(),
-                    phone: dto.clientPhone.trim(),
+                    password: randomPasswordHash,
+                    name: sanitizedName,
+                    phone: sanitizedPhone,
                     role: client_1.Role.CLIENT,
                 },
             });
@@ -182,15 +187,16 @@ let PaymentsService = PaymentsService_1 = class PaymentsService {
             items: [
                 {
                     id: params.slotId,
-                    title: `Seña de Turno (30 min) - ${params.shopName}`,
-                    description: `Reserva de turno para DNI ${params.clientDni}`,
+                    title: `Seña de Turno (30 min) - ${(0, pii_sanitizer_util_1.sanitizeControlChars)(params.shopName)}`,
+                    description: `Reserva de turno para DNI ${(0, pii_sanitizer_util_1.maskDni)(params.clientDni)}`,
                     quantity: 1,
                     currency_id: 'ARS',
                     unit_price: exports.PLATFORM_DEPOSIT_ARS,
                 },
             ],
             payer: {
-                name: params.clientName || `Cliente DNI ${params.clientDni}`,
+                name: (0, pii_sanitizer_util_1.sanitizeControlChars)(params.clientName) ||
+                    `Cliente DNI ${(0, pii_sanitizer_util_1.maskDni)(params.clientDni)}`,
                 identification: {
                     type: 'DNI',
                     number: params.clientDni,
@@ -336,19 +342,31 @@ let PaymentsService = PaymentsService_1 = class PaymentsService {
             reason: 'Pago pendiente de confirmación por Mercado Pago',
         };
     }
-    async handleWebhook(body = {}, query = {}) {
+    async handleWebhook(body = {}, query = {}, signatureHeaders) {
         const rawPaymentId = body?.data?.id ||
             query?.['data.id'] ||
             body?.id ||
             query?.id ||
             body?.payment_id;
         const paymentId = rawPaymentId !== undefined && rawPaymentId !== null
-            ? String(rawPaymentId).trim()
+            ? (0, pii_sanitizer_util_1.sanitizeControlChars)(String(rawPaymentId))
             : undefined;
-        const eventType = body?.type || query?.type || body?.action || query?.topic || 'unknown';
+        const eventType = (0, pii_sanitizer_util_1.sanitizeControlChars)(String(body?.type || query?.type || body?.action || query?.topic || 'unknown'));
         this.logger.log(`Webhook MP recibido: type=${eventType}, id=${paymentId}`);
         if (!paymentId || paymentId === '123456') {
             return { received: true, simulated: true };
+        }
+        const webhookSecret = (this.configService.get('MP_WEBHOOK_SECRET') || '').trim();
+        if (webhookSecret && signatureHeaders?.xSignature) {
+            const isValidSig = this.verifyMercadoPagoWebhookSignature(paymentId, signatureHeaders.xSignature, signatureHeaders.xRequestId, webhookSecret);
+            if (!isValidSig) {
+                this.logger.warn(`[SECURITY_AUDIT] event=WEBHOOK_SIGNATURE_INVALID paymentId=${paymentId}`);
+                return {
+                    received: true,
+                    processed: false,
+                    error: 'Invalid webhook signature',
+                };
+            }
         }
         const mpPaymentId = paymentId;
         const alreadyProcessedSlot = await this.prisma.appointmentSlot.findUnique({
@@ -580,6 +598,37 @@ let PaymentsService = PaymentsService_1 = class PaymentsService {
         catch (error) {
             this.logger.warn(`Error consultando pago ${mpPaymentId} en Mercado Pago: ${error.message}`);
             return null;
+        }
+    }
+    verifyMercadoPagoWebhookSignature(dataId, xSignature, xRequestId, secret) {
+        try {
+            const parts = xSignature.split(',');
+            let ts = '';
+            let v1 = '';
+            for (const part of parts) {
+                const [k, v] = part.split('=').map((s) => s.trim());
+                if (k === 'ts')
+                    ts = v || '';
+                if (k === 'v1')
+                    v1 = v || '';
+            }
+            if (!ts || !v1) {
+                return false;
+            }
+            const manifest = `id:${dataId.toLowerCase()};${xRequestId ? `request-id:${xRequestId};` : ''}ts:${ts};`;
+            const expectedHex = crypto
+                .createHmac('sha256', secret)
+                .update(manifest)
+                .digest('hex');
+            const bufA = Buffer.from(v1, 'hex');
+            const bufB = Buffer.from(expectedHex, 'hex');
+            if (bufA.length !== bufB.length || bufA.length === 0) {
+                return false;
+            }
+            return crypto.timingSafeEqual(bufA, bufB);
+        }
+        catch {
+            return false;
         }
     }
 };

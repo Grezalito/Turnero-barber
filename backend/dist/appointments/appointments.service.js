@@ -18,6 +18,7 @@ const bcrypt = require("bcrypt");
 const mail_service_1 = require("../mail/mail.service");
 const payments_service_1 = require("../payments/payments.service");
 const prisma_service_1 = require("../prisma/prisma.service");
+const pii_sanitizer_util_1 = require("../security/pii-sanitizer.util");
 const weekly_bonus_util_1 = require("./weekly-bonus.util");
 exports.SLOT_DURATION_MS = 30 * 60 * 1000;
 exports.LOCK_DURATION_MS = 10 * 60 * 1000;
@@ -267,17 +268,20 @@ let AppointmentsService = AppointmentsService_1 = class AppointmentsService {
         if (!slot) {
             throw new common_1.NotFoundException(`No se encontró el turno con ID ${slotId}`);
         }
+        const maskedPaymentId = slot.mp_payment_id
+            ? `***${String(slot.mp_payment_id).slice(-4)}`
+            : 'PENDIENTE';
         const icsContent = this.mailService.buildIcsCalendar({
             slotId: slot.id,
             shopName: slot.barber.shop_name,
             barberName: slot.barber.user.name,
             barberPhone: slot.barber.user.phone,
             address: slot.barber.address,
-            clientName: slot.client?.name || 'Cliente',
-            clientDni: slot.client?.dni || 'S/D',
+            clientName: (0, pii_sanitizer_util_1.maskFullNameForPublicArtifact)(slot.client?.name),
+            clientDni: (0, pii_sanitizer_util_1.maskDni)(slot.client?.dni),
             startTime: slot.start_time,
             endTime: slot.end_time,
-            mpPaymentId: slot.mp_payment_id || 'PENDIENTE',
+            mpPaymentId: maskedPaymentId,
             depositAmountArs: slot.deposit_amount,
         });
         return {
@@ -336,7 +340,7 @@ let AppointmentsService = AppointmentsService_1 = class AppointmentsService {
                 },
             });
         });
-        this.logger.log(`🚫 Turno ${slot.id} cancelado por usuario ${user.dni}. Seña retenida: ${hadPaidDeposit ? `$${slot.deposit_amount} ARS` : '$0 ARS'} (NO REEMBOLSABLE - Sin llamada a refund de Mercado Pago).`);
+        this.logger.log(`[SECURITY_AUDIT] event=APPOINTMENT_CANCELLED_NO_REFUND slotId=${slot.id} actorDni=${(0, pii_sanitizer_util_1.maskDni)(user.dni)} actorRole=${user.role} depositRetainedArs=${hadPaidDeposit ? slot.deposit_amount : 0}`);
         return {
             cancelled: true,
             slot_id: updatedSlot.id,
@@ -394,8 +398,15 @@ let AppointmentsService = AppointmentsService_1 = class AppointmentsService {
     }
     async getPublicAvailableSlotsBySlug(slug) {
         await this.releaseExpiredLocks();
+        const safeSlug = (0, pii_sanitizer_util_1.sanitizeControlChars)(slug)
+            .toLowerCase()
+            .replace(/[^a-z0-9-_]/g, '')
+            .slice(0, 64);
+        if (!safeSlug) {
+            throw new common_1.NotFoundException('No se encontró la barbería solicitada');
+        }
         const barber = await this.prisma.barberProfile.findUnique({
-            where: { slug },
+            where: { slug: safeSlug },
             include: {
                 user: {
                     select: { name: true, phone: true },
@@ -403,7 +414,7 @@ let AppointmentsService = AppointmentsService_1 = class AppointmentsService {
             },
         });
         if (!barber) {
-            throw new common_1.NotFoundException(`No se encontró ninguna barbería con el identificador "${slug}"`);
+            throw new common_1.NotFoundException(`No se encontró ninguna barbería con el identificador "${safeSlug}"`);
         }
         const nowArgentinaNominal = new Date(Date.now() - exports.ARGENTINA_UTC_OFFSET_MS);
         const availableSlots = await this.prisma.appointmentSlot.findMany({

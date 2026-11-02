@@ -1,22 +1,40 @@
 import {
   ConflictException,
   Injectable,
+  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Role } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import * as crypto from 'crypto';
 import { generateSlug } from '../admin/admin.service';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  maskDni,
+  sanitizeControlChars,
+} from '../security/pii-sanitizer.util';
 import { LoginDto } from './dto/login.dto';
 import { RegisterClientDto } from './dto/register.dto';
 
+// Hash bcrypt precalculado para igualar tiempos de cómputo cuando el DNI no existe (Mitigación de Timing Side-Channel - ISO 27001 A.8.5)
+const TIMING_SAFE_DUMMY_BCRYPT_HASH =
+  '$2b$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy';
+
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
   ) {}
+
+  private timingSafeStringEqual(a: string, b: string): boolean {
+    const hashA = crypto.createHash('sha256').update(String(a)).digest();
+    const hashB = crypto.createHash('sha256').update(String(b)).digest();
+    return crypto.timingSafeEqual(hashA, hashB);
+  }
 
   private async ensureUniqueSlug(rawSource: string): Promise<string> {
     const baseSlug =
@@ -47,11 +65,19 @@ export class AuthService {
 
   async login(dto: LoginDto) {
     const cleanDni = dto.dni.replace(/\D/g, '');
-    const superAdminDni = process.env.SUPERADMIN_DNI || '00000000';
+    const isProd = (process.env.NODE_ENV || '').toLowerCase() === 'production';
+    const superAdminDni = (
+      process.env.SUPERADMIN_DNI || (isProd ? '' : '00000000')
+    ).trim();
     const superAdminPassword =
-      process.env.SUPERADMIN_PASSWORD || 'adminPassword123!';
+      process.env.SUPERADMIN_PASSWORD || (isProd ? '' : 'adminPassword123!');
 
-    if (cleanDni === superAdminDni && dto.password === superAdminPassword) {
+    const isSuperAdminMatch =
+      Boolean(superAdminDni && superAdminPassword) &&
+      this.timingSafeStringEqual(cleanDni, superAdminDni) &&
+      this.timingSafeStringEqual(dto.password, superAdminPassword);
+
+    if (isSuperAdminMatch) {
       const hashedAdminPassword = await bcrypt.hash(superAdminPassword, 10);
       const superAdminUser = await this.prisma.user.upsert({
         where: { dni: superAdminDni },
@@ -76,6 +102,10 @@ export class AuthService {
         role: superAdminUser.role,
       };
 
+      this.logger.log(
+        `[SECURITY_AUDIT] event=AUTH_LOGIN_SUCCESS role=SUPERADMIN dni=${maskDni(cleanDni)}`,
+      );
+
       return {
         access_token: await this.jwtService.signAsync(payload),
         user: {
@@ -96,11 +126,19 @@ export class AuthService {
     });
 
     if (!user) {
+      // Ejecutar bcrypt.compare ficticio para evitar enumeración de DNI por diferencia de tiempo de respuesta (ISO 27001 A.8.5)
+      await bcrypt.compare(dto.password, TIMING_SAFE_DUMMY_BCRYPT_HASH);
+      this.logger.warn(
+        `[SECURITY_AUDIT] event=AUTH_LOGIN_FAILED reason=INVALID_CREDENTIALS dni=${maskDni(cleanDni)}`,
+      );
       throw new UnauthorizedException('DNI o contraseña incorrectos');
     }
 
     const isPasswordValid = await bcrypt.compare(dto.password, user.password);
     if (!isPasswordValid) {
+      this.logger.warn(
+        `[SECURITY_AUDIT] event=AUTH_LOGIN_FAILED reason=INVALID_PASSWORD dni=${maskDni(cleanDni)} role=${user.role}`,
+      );
       throw new UnauthorizedException('DNI o contraseña incorrectos');
     }
 
@@ -128,6 +166,10 @@ export class AuthService {
       role: user.role,
       slug: user.barber_profile?.slug || undefined,
     };
+
+    this.logger.log(
+      `[SECURITY_AUDIT] event=AUTH_LOGIN_SUCCESS role=${user.role} dni=${maskDni(cleanDni)}`,
+    );
 
     return {
       access_token: await this.jwtService.signAsync(payload),
@@ -159,9 +201,9 @@ export class AuthService {
       data: {
         dni: cleanDni,
         password: hashedPassword,
-        name: dto.name.trim(),
-        phone: dto.phone.trim(),
-        email: dto.email?.trim() || null,
+        name: sanitizeControlChars(dto.name),
+        phone: sanitizeControlChars(dto.phone),
+        email: dto.email ? sanitizeControlChars(dto.email) : null,
         role: Role.CLIENT,
       },
     });
@@ -171,6 +213,10 @@ export class AuthService {
       dni: user.dni,
       role: user.role,
     };
+
+    this.logger.log(
+      `[SECURITY_AUDIT] event=CLIENT_REGISTERED dni=${maskDni(cleanDni)}`,
+    );
 
     return {
       access_token: await this.jwtService.signAsync(payload),

@@ -22,7 +22,18 @@ export function getStoredToken(): string | null {
     localStorage.getItem(TOKEN_STORAGE_KEY) ||
     sessionStorage.getItem(TOKEN_STORAGE_KEY);
   if (!raw) return null;
-  if (raw.startsWith('demo_jwt_') || raw.split('.').length !== 3) {
+  const parts = raw.split('.');
+  if (raw.startsWith('demo_jwt_') || parts.length !== 3) {
+    clearSession();
+    return null;
+  }
+  try {
+    const payload = JSON.parse(atob(parts[1])) as { exp?: number };
+    if (typeof payload.exp === 'number' && payload.exp * 1000 <= Date.now()) {
+      clearSession();
+      return null;
+    }
+  } catch {
     clearSession();
     return null;
   }

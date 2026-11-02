@@ -8,6 +8,7 @@ import { MailModule } from './mail/mail.module';
 import { PaymentsModule } from './payments/payments.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RemindersModule } from './reminders/reminders.module';
+import { SecurityModule } from './security/security.module';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { RemindersModule } from './reminders/reminders.module';
     }),
     ScheduleModule.forRoot(),
     PrismaModule,
+    SecurityModule,
     MailModule,
     AuthModule,
     AdminModule,

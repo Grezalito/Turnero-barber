@@ -19,8 +19,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
+      algorithms: ['HS256'],
       secretOrKey:
-        configService.get<string>('JWT_SECRET') ||
+        configService.get<string>('JWT_SECRET')?.trim() ||
         'turnero-barber-super-secret-jwt-key-2026',
     });
   }

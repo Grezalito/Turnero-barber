@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Headers,
   HttpCode,
   HttpStatus,
   Logger,
@@ -8,6 +9,7 @@ import {
   Query,
 } from '@nestjs/common';
 import { Public } from '../auth/decorators/public.decorator';
+import { sanitizeControlChars } from '../security/pii-sanitizer.util';
 import { ConfirmReturnDto } from './dto/confirm-return.dto';
 import { CreatePreferenceDto } from './dto/create-preference.dto';
 import { PaymentsService } from './payments.service';
@@ -38,6 +40,8 @@ export class PaymentsController {
   async handleWebhook(
     @Body() body: Record<string, any>,
     @Query() query: Record<string, any>,
+    @Headers('x-signature') xSignature?: string,
+    @Headers('x-request-id') xRequestId?: string,
   ) {
     const rawPaymentId =
       body?.data?.id ||
@@ -47,10 +51,13 @@ export class PaymentsController {
       body?.payment_id;
     const paymentId =
       rawPaymentId !== undefined && rawPaymentId !== null
-        ? String(rawPaymentId)
+        ? sanitizeControlChars(String(rawPaymentId))
         : undefined;
-    const eventType =
-      body?.type || query?.type || body?.action || query?.topic || 'unknown';
+    const eventType = sanitizeControlChars(
+      String(
+        body?.type || query?.type || body?.action || query?.topic || 'unknown',
+      ),
+    );
 
     this.logger.log(`Webhook MP recibido: type=${eventType}, id=${paymentId}`);
 
@@ -58,6 +65,9 @@ export class PaymentsController {
       return { received: true, simulated: true };
     }
 
-    return this.paymentsService.handleWebhook(body, query);
+    return this.paymentsService.handleWebhook(body, query, {
+      xSignature,
+      xRequestId,
+    });
   }
 }

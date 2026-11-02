@@ -5,7 +5,9 @@ import { RegisterClientDto } from './dto/register.dto';
 export declare class AuthService {
     private readonly prisma;
     private readonly jwtService;
+    private readonly logger;
     constructor(prisma: PrismaService, jwtService: JwtService);
+    private timingSafeStringEqual;
     private ensureUniqueSlug;
     login(dto: LoginDto): Promise<{
         access_token: string;

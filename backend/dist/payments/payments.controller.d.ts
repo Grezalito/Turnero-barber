@@ -202,7 +202,7 @@ export declare class PaymentsController {
         reminder_message?: undefined;
         reminder_scheduled_for?: undefined;
     }>;
-    handleWebhook(body: Record<string, any>, query: Record<string, any>): Promise<{
+    handleWebhook(body: Record<string, any>, query: Record<string, any>, xSignature?: string, xRequestId?: string): Promise<{
         received: boolean;
         simulated: boolean;
         processed?: undefined;

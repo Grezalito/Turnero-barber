@@ -14,6 +14,7 @@ const passport_1 = require("@nestjs/passport");
 const auth_controller_1 = require("./auth.controller");
 const auth_service_1 = require("./auth.service");
 const jwt_strategy_1 = require("./strategies/jwt.strategy");
+const authModuleLogger = new common_1.Logger('AuthModule');
 let AuthModule = class AuthModule {
 };
 exports.AuthModule = AuthModule;
@@ -24,13 +25,22 @@ exports.AuthModule = AuthModule = __decorate([
             jwt_1.JwtModule.registerAsync({
                 imports: [config_1.ConfigModule],
                 inject: [config_1.ConfigService],
-                useFactory: (configService) => ({
-                    secret: configService.get('JWT_SECRET') ||
-                        'turnero-barber-super-secret-jwt-key-2026',
-                    signOptions: {
-                        expiresIn: configService.get('JWT_EXPIRES_IN') || '7d',
-                    },
-                }),
+                useFactory: (configService) => {
+                    const isProd = (configService.get('NODE_ENV') || '').toLowerCase() ===
+                        'production';
+                    const configuredSecret = configService.get('JWT_SECRET')?.trim();
+                    if (isProd && (!configuredSecret || configuredSecret.length < 32)) {
+                        authModuleLogger.warn('[SECURITY_AUDIT] event=WEAK_OR_MISSING_JWT_SECRET_IN_PROD recommendation="Configure un JWT_SECRET de al menos 32 bytes de entropía"');
+                    }
+                    return {
+                        secret: configuredSecret || 'turnero-barber-super-secret-jwt-key-2026',
+                        signOptions: {
+                            algorithm: 'HS256',
+                            expiresIn: configService.get('JWT_EXPIRES_IN') || '12h',
+                            issuer: 'turnero-barber-api',
+                        },
+                    };
+                },
             }),
         ],
         controllers: [auth_controller_1.AuthController],

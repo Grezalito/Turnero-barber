@@ -16,6 +16,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.PaymentsController = void 0;
 const common_1 = require("@nestjs/common");
 const public_decorator_1 = require("../auth/decorators/public.decorator");
+const pii_sanitizer_util_1 = require("../security/pii-sanitizer.util");
 const confirm_return_dto_1 = require("./dto/confirm-return.dto");
 const create_preference_dto_1 = require("./dto/create-preference.dto");
 const payments_service_1 = require("./payments.service");
@@ -30,21 +31,24 @@ let PaymentsController = PaymentsController_1 = class PaymentsController {
     async confirmReturn(dto) {
         return this.paymentsService.confirmPaymentReturn(dto);
     }
-    async handleWebhook(body, query) {
+    async handleWebhook(body, query, xSignature, xRequestId) {
         const rawPaymentId = body?.data?.id ||
             query?.['data.id'] ||
             body?.id ||
             query?.id ||
             body?.payment_id;
         const paymentId = rawPaymentId !== undefined && rawPaymentId !== null
-            ? String(rawPaymentId)
+            ? (0, pii_sanitizer_util_1.sanitizeControlChars)(String(rawPaymentId))
             : undefined;
-        const eventType = body?.type || query?.type || body?.action || query?.topic || 'unknown';
+        const eventType = (0, pii_sanitizer_util_1.sanitizeControlChars)(String(body?.type || query?.type || body?.action || query?.topic || 'unknown'));
         this.logger.log(`Webhook MP recibido: type=${eventType}, id=${paymentId}`);
         if (!paymentId || paymentId === '123456') {
             return { received: true, simulated: true };
         }
-        return this.paymentsService.handleWebhook(body, query);
+        return this.paymentsService.handleWebhook(body, query, {
+            xSignature,
+            xRequestId,
+        });
     }
 };
 exports.PaymentsController = PaymentsController;
@@ -72,8 +76,10 @@ __decorate([
     (0, common_1.HttpCode)(common_1.HttpStatus.OK),
     __param(0, (0, common_1.Body)()),
     __param(1, (0, common_1.Query)()),
+    __param(2, (0, common_1.Headers)('x-signature')),
+    __param(3, (0, common_1.Headers)('x-request-id')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object, Object]),
+    __metadata("design:paramtypes", [Object, Object, String, String]),
     __metadata("design:returntype", Promise)
 ], PaymentsController.prototype, "handleWebhook", null);
 exports.PaymentsController = PaymentsController = PaymentsController_1 = __decorate([
