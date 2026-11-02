@@ -347,6 +347,12 @@ export class AdminService {
           (st) => st.week_start.toISOString().slice(0, 10) === weekKeyIso,
         );
 
+        const isFullyTransferred = Boolean(
+          existingSettlement?.transferred &&
+            existingSettlement.bonus_amount_ars >= metrics.earned_bonus_ars &&
+            metrics.earned_bonus_ars > 0,
+        );
+
         items.push({
           id: existingSettlement?.id || `${barber.id}_${weekKeyIso}`,
           barber_id: barber.id,
@@ -366,10 +372,11 @@ export class AdminService {
           bonus_tier_label: metrics.tier_label,
           amount_to_transfer_ars: metrics.earned_bonus_ars,
           reminder_ia_bonified: metrics.reminder_ia_bonified,
-          transferred: existingSettlement?.transferred || false,
-          transferred_at: existingSettlement?.transferred_at
-            ? existingSettlement.transferred_at.toISOString()
-            : null,
+          transferred: isFullyTransferred,
+          transferred_at:
+            isFullyTransferred && existingSettlement?.transferred_at
+              ? existingSettlement.transferred_at.toISOString()
+              : null,
         });
       }
     }

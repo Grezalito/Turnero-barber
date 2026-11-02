@@ -263,12 +263,40 @@ export const api = {
     });
   },
 
-  async releaseSlotLock(slotId: string) {
+  async confirmPaymentReturn(payload: {
+    slotId?: string;
+    external_reference?: string;
+    paymentId?: string;
+    payment_id?: string;
+    collection_id?: string;
+    status?: string;
+    collection_status?: string;
+    preference_id?: string;
+  }): Promise<WebhookSimulationResponse & { released?: boolean; barber_slug?: string }> {
+    return request<WebhookSimulationResponse & { released?: boolean; barber_slug?: string }>(
+      '/payments/confirm-return',
+      {
+        method: 'POST',
+        skipAuth: true,
+        body: JSON.stringify(payload),
+      },
+    );
+  },
+
+  async releaseSlotLock(
+    slotId: string,
+    clientDni?: string,
+    preferenceId?: string,
+  ) {
     return request<{ released: boolean; slot_id: string }>(
       `/appointments/${encodeURIComponent(slotId)}/release-lock`,
       {
         method: 'POST',
         skipAuth: true,
+        body: JSON.stringify({
+          ...(clientDni ? { clientDni } : {}),
+          ...(preferenceId ? { preferenceId } : {}),
+        }),
       },
     );
   },

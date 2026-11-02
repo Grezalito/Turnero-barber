@@ -8,6 +8,7 @@ import {
   Query,
 } from '@nestjs/common';
 import { Public } from '../auth/decorators/public.decorator';
+import { ConfirmReturnDto } from './dto/confirm-return.dto';
 import { CreatePreferenceDto } from './dto/create-preference.dto';
 import { PaymentsService } from './payments.service';
 
@@ -22,6 +23,13 @@ export class PaymentsController {
   @HttpCode(HttpStatus.OK)
   async createPreference(@Body() dto: CreatePreferenceDto) {
     return this.paymentsService.createPreferenceForSlot(dto);
+  }
+
+  @Public()
+  @Post('confirm-return')
+  @HttpCode(HttpStatus.OK)
+  async confirmReturn(@Body() dto: ConfirmReturnDto) {
+    return this.paymentsService.confirmPaymentReturn(dto);
   }
 
   @Public()

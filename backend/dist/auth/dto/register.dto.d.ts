@@ -4,8 +4,4 @@ export declare class RegisterClientDto {
     name: string;
     phone: string;
     email?: string;
-    shopName?: string;
-    shop_name?: string;
-    slug?: string;
-    address?: string;
 }

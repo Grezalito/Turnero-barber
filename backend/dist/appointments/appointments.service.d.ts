@@ -8,6 +8,7 @@ import { LockSlotDto } from './dto/lock-slot.dto';
 import { ManageBarberSlotsDto } from './dto/manage-slots.dto';
 export declare const SLOT_DURATION_MS: number;
 export declare const LOCK_DURATION_MS: number;
+export declare const ARGENTINA_UTC_OFFSET_MS: number;
 export declare class AppointmentsService {
     private readonly prisma;
     private readonly paymentsService;
@@ -135,7 +136,7 @@ export declare class AppointmentsService {
         deposit_amount_retained_ars: number;
         policy: string;
     }>;
-    releaseSingleLock(slotId: string): Promise<{
+    releaseSingleLock(slotId: string, clientDni?: string, preferenceId?: string): Promise<{
         released: boolean;
         slot_id: string;
     }>;

@@ -36,28 +36,6 @@ export declare class AuthController {
             phone: string;
             email: string | null;
             role: import(".prisma/client").$Enums.Role;
-            barber_profile: {
-                shop_name: string;
-                slug: string;
-                address: string | null;
-                reminder_config: import("@prisma/client/runtime/library").JsonValue | null;
-                id: string;
-                user_id: string;
-                reminder_addon_active: boolean;
-                created_at: Date;
-                updated_at: Date;
-            } | null;
-        };
-    } | {
-        access_token: string;
-        user: {
-            id: string;
-            dni: string;
-            name: string;
-            phone: string;
-            email: string | null;
-            role: import(".prisma/client").$Enums.Role;
-            barber_profile?: undefined;
         };
     }>;
     getMe(user: JwtPayloadUser): Promise<{

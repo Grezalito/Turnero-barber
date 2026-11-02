@@ -154,55 +154,6 @@ export class AuthService {
     }
 
     const hashedPassword = await bcrypt.hash(dto.password, 10);
-    const resolvedShopName = (dto.shopName || dto.shop_name || '').trim();
-
-    if (resolvedShopName) {
-      const uniqueSlug = await this.ensureUniqueSlug(
-        dto.slug?.trim() || resolvedShopName,
-      );
-
-      const barberUser = await this.prisma.user.create({
-        data: {
-          dni: cleanDni,
-          password: hashedPassword,
-          name: dto.name.trim(),
-          phone: dto.phone.trim(),
-          email: dto.email?.trim() || null,
-          role: Role.BARBER,
-          barber_profile: {
-            create: {
-              shop_name: resolvedShopName,
-              slug: uniqueSlug,
-              address: dto.address?.trim() || null,
-              reminder_addon_active: false,
-            },
-          },
-        },
-        include: {
-          barber_profile: true,
-        },
-      });
-
-      const payload = {
-        sub: barberUser.id,
-        dni: barberUser.dni,
-        role: barberUser.role,
-        slug: barberUser.barber_profile?.slug || undefined,
-      };
-
-      return {
-        access_token: await this.jwtService.signAsync(payload),
-        user: {
-          id: barberUser.id,
-          dni: barberUser.dni,
-          name: barberUser.name,
-          phone: barberUser.phone,
-          email: barberUser.email,
-          role: barberUser.role,
-          barber_profile: barberUser.barber_profile,
-        },
-      };
-    }
 
     const user = await this.prisma.user.create({
       data: {

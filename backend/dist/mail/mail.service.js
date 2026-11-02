@@ -43,10 +43,14 @@ let MailService = MailService_1 = class MailService {
             .replace(/[-:]/g, '')
             .replace(/\.\d{3}Z$/, 'Z');
     }
+    formatArgentinaSlotToUtcIcsDate(nominalDate) {
+        const realUtcDate = new Date(nominalDate.getTime() + 3 * 60 * 60 * 1000);
+        return this.formatIcsUtcDate(realUtcDate);
+    }
     buildIcsCalendar(payload) {
         const nowUtc = this.formatIcsUtcDate(new Date());
-        const startUtc = this.formatIcsUtcDate(payload.startTime);
-        const endUtc = this.formatIcsUtcDate(payload.endTime);
+        const startUtc = this.formatArgentinaSlotToUtcIcsDate(payload.startTime);
+        const endUtc = this.formatArgentinaSlotToUtcIcsDate(payload.endTime);
         const location = payload.address || payload.shopName;
         const summary = `Corte de Barbería (30 min) - ${payload.shopName}`;
         const descriptionLines = [

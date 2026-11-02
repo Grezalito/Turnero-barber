@@ -50,8 +50,8 @@ let AppointmentsController = class AppointmentsController {
     async cancelAppointment(slotId, user) {
         return this.appointmentsService.cancelAppointmentNoRefund(slotId, user);
     }
-    async releaseLock(slotId) {
-        return this.appointmentsService.releaseSingleLock(slotId);
+    async releaseLock(slotId, body) {
+        return this.appointmentsService.releaseSingleLock(slotId, body?.clientDni, body?.preferenceId);
     }
     async lockSlot(slotId, authHeader, dto) {
         let authenticatedUserId;
@@ -122,13 +122,16 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], AppointmentsController.prototype, "cancelAppointment", null);
 __decorate([
+    (0, public_decorator_1.Public)(),
     (0, common_1.Post)(':slotId/release-lock'),
     __param(0, (0, common_1.Param)('slotId')),
+    __param(1, (0, common_1.Body)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String]),
+    __metadata("design:paramtypes", [String, Object]),
     __metadata("design:returntype", Promise)
 ], AppointmentsController.prototype, "releaseLock", null);
 __decorate([
+    (0, public_decorator_1.Public)(),
     (0, common_1.Post)(':slotId/lock'),
     __param(0, (0, common_1.Param)('slotId')),
     __param(1, (0, common_1.Headers)('authorization')),

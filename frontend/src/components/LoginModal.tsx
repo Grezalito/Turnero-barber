@@ -59,25 +59,25 @@ export const LoginModal: React.FC<LoginModalProps> = ({
     <div
       role="dialog"
       aria-modal="true"
-      className="fixed inset-0 z-50 h-[100dvh] flex items-center justify-center bg-[#0A0A0B]/85 backdrop-blur-xs p-4 pointer-events-auto"
+      className="fixed inset-0 z-50 h-[100dvh] flex items-center justify-center bg-[#090D16]/85 backdrop-blur-xs p-4 pointer-events-auto"
     >
       <div className="fixed inset-0 z-40" onClick={onClose} />
 
-      <div className="relative z-50 w-full max-w-md bg-[#121214] border border-[#242428] rounded-sm p-5 sm:p-6 shadow-2xl pointer-events-auto">
-        <div className="flex items-start justify-between gap-4 mb-4 border-b border-[#242428] pb-3.5">
+      <div className="relative z-50 w-full max-w-md bg-[#0F172A] border border-[#1E293B] rounded-xl p-5 sm:p-6 shadow-2xl pointer-events-auto">
+        <div className="flex items-start justify-between gap-4 mb-4 border-b border-[#1E293B] pb-3.5">
           <div>
-            <span className="font-mono-code text-[10px] uppercase tracking-widest text-[#D49A2A] block">
-              USO EXCLUSIVO STAFF
+            <span className="text-[11px] font-medium text-[#3B82F6] block">
+              Uso exclusivo staff
             </span>
-            <h2 className="font-display text-base font-extrabold uppercase tracking-wider text-[#F2EFE9] mt-0.5">
-              {user ? 'SESIÓN DE BARBERO / ADMIN' : 'ACCESO BARBEROS'}
+            <h2 className="text-base font-semibold text-[#F8FAFC] mt-0.5">
+              {user ? 'Sesión de Barbero / Admin' : 'Acceso Barberos'}
             </h2>
           </div>
           <button
             type="button"
             onClick={onClose}
             aria-label="Cerrar"
-            className="w-9 h-9 rounded-sm bg-[#0A0A0B] border border-[#242428] hover:border-[#D49A2A] flex items-center justify-center text-[#8A8A93] hover:text-[#F2EFE9] cursor-pointer transition-colors"
+            className="w-9 h-9 rounded-lg bg-[#090D16] border border-[#1E293B] hover:border-[#334155] flex items-center justify-center text-[#94A3B8] hover:text-[#F8FAFC] cursor-pointer transition-colors"
           >
             <X className="w-4 h-4" />
           </button>
@@ -85,29 +85,27 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 
         {user ? (
           <div className="space-y-4">
-            <div className="p-4 rounded-sm bg-[#0A0A0B] border border-[#242428] space-y-2.5 text-xs">
+            <div className="p-4 rounded-lg bg-[#090D16] border border-[#1E293B] space-y-2.5 text-xs">
               <div className="flex items-center justify-between">
-                <span className="text-[#8A8A93]">Rol activo</span>
-                <span className="font-mono-code px-2 py-0.5 rounded-sm bg-[#D49A2A]/15 border border-[#D49A2A] font-bold text-[#D49A2A]">
+                <span className="text-[#94A3B8]">Rol activo</span>
+                <span className="px-2.5 py-0.5 rounded-full bg-[#2563EB]/15 border border-[#2563EB]/40 font-semibold text-[#3B82F6]">
                   {user.role}
                 </span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-[#8A8A93]">DNI</span>
-                <span className="font-mono-code font-bold text-[#F2EFE9]">
-                  {user.dni}
-                </span>
+                <span className="text-[#94A3B8]">DNI</span>
+                <span className="font-semibold text-[#F8FAFC]">{user.dni}</span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-[#8A8A93]">Nombre</span>
-                <span className="font-semibold text-[#F2EFE9]">
+                <span className="text-[#94A3B8]">Nombre</span>
+                <span className="font-semibold text-[#F8FAFC]">
                   {user.name}
                 </span>
               </div>
               {user.barber_profile?.slug && (
                 <div className="flex items-center justify-between">
-                  <span className="text-[#8A8A93]">Slug Público</span>
-                  <span className="font-mono-code text-[#D49A2A]">
+                  <span className="text-[#94A3B8]">Slug Público</span>
+                  <span className="font-medium text-[#3B82F6]">
                     /{user.barber_profile.slug}
                   </span>
                 </div>
@@ -124,7 +122,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                         onNavigateView('BARBER_PANEL');
                         onClose();
                       }}
-                      className="min-h-[44px] px-3 rounded-sm bg-[#D49A2A] hover:bg-[#b8831f] text-[#0A0A0B] font-display text-xs uppercase font-extrabold tracking-wider flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                      className="min-h-[44px] px-3 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] text-[#F8FAFC] text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer"
                     >
                       <Calendar className="w-4 h-4" />
                       Mi Agenda
@@ -135,9 +133,9 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                         onNavigateView('PUBLIC_BOOKING');
                         onClose();
                       }}
-                      className="min-h-[44px] px-3 rounded-sm bg-[#0A0A0B] border border-[#242428] hover:border-[#D49A2A] text-[#F2EFE9] font-display text-xs uppercase font-bold tracking-wider flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                      className="min-h-[44px] px-3 rounded-lg bg-[#090D16] border border-[#1E293B] hover:border-[#334155] text-[#F8FAFC] text-xs font-medium flex items-center justify-center gap-2 transition-colors cursor-pointer"
                     >
-                      <Eye className="w-4 h-4 text-[#D49A2A]" />
+                      <Eye className="w-4 h-4 text-[#3B82F6]" />
                       Vista Pública
                     </button>
                   </>
@@ -151,7 +149,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                         onNavigateView('SUPERADMIN_PANEL');
                         onClose();
                       }}
-                      className="min-h-[44px] px-3 rounded-sm bg-[#D49A2A] hover:bg-[#b8831f] text-[#0A0A0B] font-display text-xs uppercase font-extrabold tracking-wider flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                      className="min-h-[44px] px-3 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] text-[#F8FAFC] text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer"
                     >
                       <ShieldCheck className="w-4 h-4" />
                       Panel SuperAdmin
@@ -162,9 +160,9 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                         onNavigateView('PUBLIC_BOOKING');
                         onClose();
                       }}
-                      className="min-h-[44px] px-3 rounded-sm bg-[#0A0A0B] border border-[#242428] hover:border-[#D49A2A] text-[#F2EFE9] font-display text-xs uppercase font-bold tracking-wider flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                      className="min-h-[44px] px-3 rounded-lg bg-[#090D16] border border-[#1E293B] hover:border-[#334155] text-[#F8FAFC] text-xs font-medium flex items-center justify-center gap-2 transition-colors cursor-pointer"
                     >
-                      <Eye className="w-4 h-4 text-[#D49A2A]" />
+                      <Eye className="w-4 h-4 text-[#3B82F6]" />
                       Vista Pública
                     </button>
                   </>
@@ -178,25 +176,25 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                 onLogout();
                 onClose();
               }}
-              className="w-full min-h-[44px] rounded-sm bg-[#0A0A0B] border border-[#C85A32] hover:bg-[#C85A32]/15 text-[#F2EFE9] font-display text-xs uppercase font-bold tracking-wider flex items-center justify-center gap-2 transition-colors cursor-pointer"
+              className="w-full min-h-[44px] rounded-lg bg-[#090D16] border border-[#1E293B] hover:border-[#334155] text-[#94A3B8] hover:text-[#F8FAFC] text-xs font-medium flex items-center justify-center gap-2 transition-colors cursor-pointer"
             >
-              <LogOut className="w-4 h-4 text-[#C85A32]" />
+              <LogOut className="w-4 h-4 text-[#3B82F6]" />
               Cerrar Sesión
             </button>
           </div>
         ) : (
           <>
             {error && (
-              <div className="mb-4 p-3 rounded-sm bg-[#0A0A0B] border border-[#C85A32] flex items-center gap-2 font-mono-code text-xs text-[#F2EFE9]">
-                <ShieldAlert className="w-4 h-4 text-[#C85A32] shrink-0" />
+              <div className="mb-4 p-3 rounded-lg bg-[#090D16] border border-[#334155] flex items-center gap-2 text-xs text-[#F8FAFC]">
+                <ShieldAlert className="w-4 h-4 text-[#3B82F6] shrink-0" />
                 <span>{error}</span>
               </div>
             )}
 
             <form onSubmit={handleSubmit} className="space-y-3.5">
               <div>
-                <label className="block font-display text-[10px] uppercase tracking-wider text-[#8A8A93] mb-1">
-                  DNI DE BARBERO / ADMIN
+                <label className="block text-xs font-medium text-[#94A3B8] mb-1">
+                  DNI de Barbero / Admin
                 </label>
                 <input
                   type="text"
@@ -206,13 +204,13 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                   placeholder="Ej: 34888999"
                   value={dni}
                   onChange={(e) => setDni(e.target.value.replace(/\D/g, ''))}
-                  className="w-full min-h-[46px] px-3.5 rounded-sm bg-[#0A0A0B] border border-[#242428] focus:border-[#D49A2A] focus:outline-none font-mono-code text-sm text-[#F2EFE9]"
+                  className="w-full min-h-[46px] px-3.5 rounded-lg bg-[#090D16] border border-[#1E293B] focus:border-[#2563EB] focus:outline-none text-sm text-[#F8FAFC]"
                 />
               </div>
 
               <div>
-                <label className="block font-display text-[10px] uppercase tracking-wider text-[#8A8A93] mb-1">
-                  CONTRASEÑA
+                <label className="block text-xs font-medium text-[#94A3B8] mb-1">
+                  Contraseña
                 </label>
                 <input
                   type="password"
@@ -221,11 +219,11 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                   placeholder="••••••"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full min-h-[46px] px-3.5 rounded-sm bg-[#0A0A0B] border border-[#242428] focus:border-[#D49A2A] focus:outline-none font-mono-code text-sm text-[#F2EFE9]"
+                  className="w-full min-h-[46px] px-3.5 rounded-lg bg-[#090D16] border border-[#1E293B] focus:border-[#2563EB] focus:outline-none text-sm text-[#F8FAFC]"
                 />
               </div>
 
-              <p className="text-[11px] text-[#8A8A93]">
+              <p className="text-[11px] text-[#94A3B8]">
                 Los clientes reservan su turno directamente desde la grilla sin
                 necesidad de iniciar sesión.
               </p>
@@ -233,10 +231,10 @@ export const LoginModal: React.FC<LoginModalProps> = ({
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full min-h-[48px] mt-1 rounded-sm bg-[#D49A2A] hover:bg-[#b8831f] text-[#0A0A0B] font-display text-xs uppercase font-extrabold tracking-wider flex items-center justify-center gap-2 transition-colors disabled:opacity-50 cursor-pointer"
+                className="w-full min-h-[48px] mt-1 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] text-[#F8FAFC] text-sm font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50 cursor-pointer"
               >
                 <KeyRound className="w-4 h-4" />
-                <span>{loading ? 'VERIFICANDO...' : 'INGRESAR AL PANEL'}</span>
+                <span>{loading ? 'Verificando...' : 'Ingresar al Panel'}</span>
               </button>
             </form>
           </>

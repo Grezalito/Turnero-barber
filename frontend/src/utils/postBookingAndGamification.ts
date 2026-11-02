@@ -3,8 +3,20 @@ import { WeeklyGoalMetrics } from '../types/api';
 export const NON_REFUNDABLE_LEGEND =
   'Reserva garantizada: la seña de $2.000 ARS no es reembolsable ni transferible ante cancelaciones o inasistencias';
 
+export const ARGENTINA_OFFSET_MS = 3 * 60 * 60 * 1000; // UTC-3 (America/Argentina/Buenos_Aires)
+
 /**
- * Convierte un ISO string a formato UTC compacto YYYYMMDDTHHMMSSZ para Google Calendar e ICS.
+ * Obtiene la fecha YYYY-MM-DD en zona horaria de Argentina (UTC-3),
+ * evitando que pasadas las 21:00 hs salte al día siguiente.
+ */
+export function getArgentinaDateIso(offsetDays = 0): string {
+  const targetMs =
+    Date.now() - ARGENTINA_OFFSET_MS + offsetDays * 24 * 60 * 60 * 1000;
+  return new Date(targetMs).toISOString().slice(0, 10);
+}
+
+/**
+ * Convierte un ISO string a formato UTC compacto YYYYMMDDTHHMMSSZ.
  */
 export function toUtcCalendarTimestamp(iso: string): string {
   const d = new Date(iso);
@@ -15,8 +27,21 @@ export function toUtcCalendarTimestamp(iso: string): string {
 }
 
 /**
+ * Convierte un horario nominal de turno (almacenado como HH:mm UTC nominal para Argentina UTC-3)
+ * al instante UTC real (+3 horas) para que Google Calendar, Apple Calendar y Outlook en Argentina
+ * agenden el turno en la hora local exacta.
+ */
+export function toArgentinaRealUtcCalendarTimestamp(nominalIso: string): string {
+  const d = new Date(new Date(nominalIso).getTime() + ARGENTINA_OFFSET_MS);
+  return d
+    .toISOString()
+    .replace(/[-:]/g, '')
+    .replace(/\.\d{3}Z$/, 'Z');
+}
+
+/**
  * Construye el enlace dinámico para "AGREGAR A GOOGLE CALENDAR":
- * Incluye título del corte, barbería, horario UTC de inicio y fin de 30 min, y seña acreditada.
+ * Incluye título del corte, barbería, horario real de inicio y fin de 30 min en Argentina, y seña acreditada.
  */
 export function buildGoogleCalendarUrl(params: {
   shopName: string;
@@ -27,8 +52,8 @@ export function buildGoogleCalendarUrl(params: {
   mpPaymentId: string;
   depositAmountArs?: number;
 }): string {
-  const startUtc = toUtcCalendarTimestamp(params.startTimeIso);
-  const endUtc = toUtcCalendarTimestamp(params.endTimeIso);
+  const startUtc = toArgentinaRealUtcCalendarTimestamp(params.startTimeIso);
+  const endUtc = toArgentinaRealUtcCalendarTimestamp(params.endTimeIso);
   const deposit = params.depositAmountArs ?? 2000;
 
   const title = `Corte de Barbería (30 min) - ${params.shopName}`;
@@ -49,6 +74,7 @@ export function buildGoogleCalendarUrl(params: {
   url.searchParams.set('action', 'TEMPLATE');
   url.searchParams.set('text', title);
   url.searchParams.set('dates', `${startUtc}/${endUtc}`);
+  url.searchParams.set('ctz', 'America/Argentina/Buenos_Aires');
   url.searchParams.set('details', details);
   url.searchParams.set('location', location);
 
@@ -92,8 +118,8 @@ export function buildLocalIcsContent(params: {
   mpPaymentId: string;
 }): string {
   const nowUtc = toUtcCalendarTimestamp(new Date().toISOString());
-  const startUtc = toUtcCalendarTimestamp(params.startTimeIso);
-  const endUtc = toUtcCalendarTimestamp(params.endTimeIso);
+  const startUtc = toArgentinaRealUtcCalendarTimestamp(params.startTimeIso);
+  const endUtc = toArgentinaRealUtcCalendarTimestamp(params.endTimeIso);
   const summary = `Corte de Barbería (30 min) - ${params.shopName}`;
   const location = params.address || params.shopName;
   const description = `Reserva confirmada en ${params.shopName}\\nSeña acreditada: $2.000 ARS\\nComprobante MP: ${params.mpPaymentId}\\n${NON_REFUNDABLE_LEGEND}`;
@@ -101,7 +127,7 @@ export function buildLocalIcsContent(params: {
   return [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
-    'PRODID:-//Turnero Barber Craft//Booking Engine 30m//ES',
+    'PRODID:-//Turnero Barber//Booking Engine 30m//ES',
     'CALSCALE:GREGORIAN',
     'METHOD:PUBLISH',
     'BEGIN:VEVENT',

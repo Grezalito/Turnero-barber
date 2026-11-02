@@ -19,6 +19,7 @@ import {
 } from './types/api';
 import {
   calculateWeeklyGoalMetrics,
+  getArgentinaDateIso,
   getWeekBoundsUtc,
 } from './utils/postBookingAndGamification';
 
@@ -107,13 +108,9 @@ function buildInitialDemoSettlements(): WeeklySettlementItem[] {
 }
 
 function buildInitialDemoSchedule(slug: string): PublicBarberScheduleResponse {
-  const today = new Date().toISOString().slice(0, 10);
-  const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000)
-    .toISOString()
-    .slice(0, 10);
-  const dayAfter = new Date(Date.now() + 48 * 60 * 60 * 1000)
-    .toISOString()
-    .slice(0, 10);
+  const today = getArgentinaDateIso(0);
+  const tomorrow = getArgentinaDateIso(1);
+  const dayAfter = getArgentinaDateIso(2);
 
   const buildDaySlots = (dateStr: string, hours: string[]): AppointmentSlot[] =>
     hours.map((hhmm, idx) => {
@@ -179,10 +176,8 @@ function buildInitialDemoSchedule(slug: string): PublicBarberScheduleResponse {
 function buildInitialDemoBarberSlots(
   publicDates: Record<string, AppointmentSlot[]>,
 ): AppointmentSlot[] {
-  const today = new Date().toISOString().slice(0, 10);
-  const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000)
-    .toISOString()
-    .slice(0, 10);
+  const today = getArgentinaDateIso(0);
+  const tomorrow = getArgentinaDateIso(1);
 
   const makeBooked = (
     dateStr: string,
@@ -392,6 +387,106 @@ const AppContent: React.FC = () => {
     }
   }, [token]);
 
+  // Reconexión limpia del retorno de Mercado Pago (back_urls con payment_status, payment_id y slot)
+  useEffect(() => {
+    const search = window.location.search;
+    if (!search) return;
+
+    const params = new URLSearchParams(search);
+    const rawStatus = (
+      params.get('collection_status') ||
+      params.get('status') ||
+      params.get('payment_status') ||
+      params.get('payment') ||
+      ''
+    )
+      .trim()
+      .toLowerCase();
+    const slotId = (
+      params.get('slot') ||
+      params.get('external_reference') ||
+      ''
+    ).trim();
+    const paymentId = (
+      params.get('payment_id') ||
+      params.get('collection_id') ||
+      ''
+    ).trim();
+    const preferenceId = (params.get('preference_id') || '').trim();
+
+    if (!rawStatus && !paymentId) return;
+
+    // Limpiar la URL inmediatamente para evitar reprocesamientos al refrescar
+    window.history.replaceState({}, '', window.location.pathname);
+
+    const normalizedStatus =
+      rawStatus === 'success'
+        ? 'approved'
+        : rawStatus === 'failure'
+          ? 'rejected'
+          : rawStatus;
+
+    api
+      .confirmPaymentReturn({
+        slotId: slotId || undefined,
+        external_reference: slotId || undefined,
+        paymentId: paymentId || undefined,
+        status: normalizedStatus || undefined,
+        preference_id: preferenceId || undefined,
+      })
+      .then((res) => {
+        if (res.processed && res.status === 'CONFIRMED') {
+          setStatusMessage(null);
+          setSelectedSlot(null);
+          setActiveLock(null);
+          setIsSandboxCheckoutOpen(false);
+          setConfirmedSlotInfo({
+            slotId: res.slot_id || slotId,
+            mpPaymentId: res.mp_payment_id || paymentId || 'ACREDITADO',
+            startTimeIso: res.start_time,
+            endTimeIso: res.end_time,
+            barberPhone: res.barber_phone || schedule.barber.barber_phone,
+            reminderEnqueued: Boolean(res.reminder_enqueued),
+            reminderMessage: res.reminder_message || null,
+            emailMode: res.email_mode,
+          });
+        } else if (
+          normalizedStatus === 'rejected' ||
+          normalizedStatus === 'cancelled' ||
+          normalizedStatus === 'null' ||
+          res.released
+        ) {
+          setStatusMessage(
+            'El pago no pudo completarse o fue cancelado. El horario fue liberado nuevamente.',
+          );
+        } else if (
+          normalizedStatus === 'pending' ||
+          normalizedStatus === 'in_process'
+        ) {
+          setStatusMessage(
+            'Tu pago en Mercado Pago se encuentra pendiente de acreditación. Te confirmaremos apenas se acredite.',
+          );
+        }
+      })
+      .catch(() => {
+        if (normalizedStatus === 'approved' && slotId) {
+          setConfirmedSlotInfo({
+            slotId,
+            mpPaymentId: paymentId || 'ACREDITADO',
+            barberPhone: schedule.barber.barber_phone,
+            reminderEnqueued: false,
+          });
+        } else if (normalizedStatus === 'rejected') {
+          setStatusMessage(
+            'El pago fue rechazado o cancelado. Podés intentar nuevamente con otro medio de pago.',
+          );
+        }
+      })
+      .finally(() => {
+        loadPublicSchedule(slug);
+      });
+  }, [loadPublicSchedule, schedule.barber.barber_phone, slug]);
+
   useEffect(() => {
     const handlePopState = () => {
       const pathSlug = resolveSlugFromPathname(window.location.pathname);
@@ -455,6 +550,14 @@ const AppContent: React.FC = () => {
       if (msg.includes('409') || msg.includes('reservado')) {
         setStatusMessage(msg);
         await loadPublicSchedule(slug);
+        return;
+      }
+
+      if (!import.meta.env.DEV) {
+        setStatusMessage(
+          msg ||
+            'No se pudo iniciar el proceso de pago en Mercado Pago. Intentá nuevamente.',
+        );
         return;
       }
 
@@ -635,7 +738,7 @@ const AppContent: React.FC = () => {
   );
 
   return (
-    <div className="min-h-[100dvh] w-full overflow-x-hidden bg-[#0A0A0B] text-[#F2EFE9]">
+    <div className="min-h-[100dvh] w-full overflow-x-hidden bg-[#090D16] text-[#F8FAFC]">
       <Header
         user={user}
         activeView={activeView}
@@ -647,9 +750,9 @@ const AppContent: React.FC = () => {
         onLogout={handleLogout}
       />
 
-      <main className="max-w-3xl mx-auto pt-14 px-3.5 sm:px-4">
+      <main className="max-w-3xl mx-auto pt-16 px-3.5 sm:px-4">
         {statusMessage && (
-          <div className="mb-3 p-3 rounded-sm bg-[#121214] border border-[#D49A2A] text-xs font-medium text-[#F2EFE9]">
+          <div className="mb-3 p-3.5 rounded-xl bg-[#0F172A] border border-[#2563EB] text-xs font-medium text-[#F8FAFC]">
             {statusMessage}
           </div>
         )}

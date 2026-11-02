@@ -145,7 +145,10 @@ export declare class AppointmentsController {
         deposit_amount_retained_ars: number;
         policy: string;
     }>;
-    releaseLock(slotId: string): Promise<{
+    releaseLock(slotId: string, body?: {
+        clientDni?: string;
+        preferenceId?: string;
+    }): Promise<{
         released: boolean;
         slot_id: string;
     }>;

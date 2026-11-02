@@ -84,11 +84,20 @@ export class AppointmentsController {
     return this.appointmentsService.cancelAppointmentNoRefund(slotId, user);
   }
 
+  @Public()
   @Post(':slotId/release-lock')
-  async releaseLock(@Param('slotId') slotId: string) {
-    return this.appointmentsService.releaseSingleLock(slotId);
+  async releaseLock(
+    @Param('slotId') slotId: string,
+    @Body() body?: { clientDni?: string; preferenceId?: string },
+  ) {
+    return this.appointmentsService.releaseSingleLock(
+      slotId,
+      body?.clientDni,
+      body?.preferenceId,
+    );
   }
 
+  @Public()
   @Post(':slotId/lock')
   async lockSlot(
     @Param('slotId') slotId: string,

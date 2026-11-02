@@ -22,6 +22,7 @@ import {
   buildGoogleCalendarUrl,
   buildWhatsAppShareUrl,
 } from '../utils/postBookingAndGamification';
+import { SandboxCheckoutModal } from './SandboxCheckoutModal';
 
 export interface InlineBookingClientData {
   dni: string;
@@ -101,9 +102,17 @@ export function formatDateHeader(dateStr: string): {
 
 export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
   schedule,
+  slug,
   onRefresh,
   selectedSlot,
   onSelectSlot,
+  activeLock = null,
+  onInitiateLock,
+  onSimulateWebhook,
+  onSimulateRejectedWebhook,
+  onReleaseLock,
+  isSandboxCheckoutOpen = false,
+  onSetSandboxCheckoutOpen,
   onOpenBarberAccess,
   confirmedSlotInfo,
   isLocking,
@@ -122,6 +131,7 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
   const [confirmError, setConfirmError] = useState<string | null>(null);
   const [isConnectingMp, setIsConnectingMp] = useState(false);
   const [toastAlert, setToastAlert] = useState<string | null>(null);
+  const [remainingSeconds, setRemainingSeconds] = useState<number>(600);
 
   useEffect(() => {
     if (dateKeys.length > 0 && !dateKeys.includes(selectedDate)) {
@@ -134,6 +144,32 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
     const timer = setTimeout(() => setToastAlert(null), 6000);
     return () => clearTimeout(timer);
   }, [toastAlert]);
+
+  useEffect(() => {
+    if (!activeLock?.slot.locked_until) {
+      setRemainingSeconds(600);
+      return;
+    }
+    const updateCountdown = () => {
+      const diffSec = Math.max(
+        0,
+        Math.floor(
+          (new Date(activeLock.slot.locked_until!).getTime() - Date.now()) /
+            1000,
+        ),
+      );
+      setRemainingSeconds(diffSec);
+    };
+    updateCountdown();
+    const interval = setInterval(updateCountdown, 1000);
+    return () => clearInterval(interval);
+  }, [activeLock]);
+
+  const countdownFormatted = useMemo(() => {
+    const mins = String(Math.floor(remainingSeconds / 60)).padStart(2, '0');
+    const secs = String(remainingSeconds % 60).padStart(2, '0');
+    return `${mins}:${secs}`;
+  }, [remainingSeconds]);
 
   const slotsForSelectedDate = useMemo(() => {
     if (!selectedDate) return [];
@@ -193,11 +229,31 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
       // Redirección nativa inmediata en la misma ventana a Mercado Pago
       window.location.href = data.init_point;
     } catch (err) {
-      const message =
-        (err as Error).message ||
+      const message = (err as Error).message || '';
+
+      // En desarrollo local (desacoplado de producción), si no hay MP_ACCESS_TOKEN productivo configurado,
+      // permitimos abrir el simulador Sandbox local para pruebas de flujo sin afectar producción.
+      if (
+        import.meta.env.DEV &&
+        onInitiateLock &&
+        !message.includes('409') &&
+        !message.includes('reservado')
+      ) {
+        setIsConfirmSheetOpen(false);
+        setIsConnectingMp(false);
+        await onInitiateLock(selectedSlot, {
+          dni: cleanDni,
+          name: confirmName.trim(),
+          phone: confirmPhone.trim(),
+        });
+        return;
+      }
+
+      const displayMessage =
+        message ||
         'Este horario acaba de ser tomado o no está disponible. Por favor elegí otro turno.';
-      setConfirmError(message);
-      setToastAlert(message);
+      setConfirmError(displayMessage);
+      setToastAlert(displayMessage);
       setIsConnectingMp(false);
       onRefresh();
     }
@@ -211,10 +267,10 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
       {toastAlert && (
         <div
           role="alert"
-          className="fixed top-14 left-3.5 right-3.5 sm:left-auto sm:right-6 sm:max-w-md z-50 p-3.5 rounded-xl bg-[#0F172A] border border-[#2563EB] shadow-2xl flex items-start justify-between gap-3"
+          className="fixed top-16 left-3.5 right-3.5 sm:left-auto sm:right-6 sm:max-w-md z-50 p-3.5 rounded-xl bg-[#0F172A] border border-[#2563EB] shadow-2xl flex items-start justify-between gap-3"
         >
           <div className="flex items-start gap-2.5">
-            <ShieldAlert className="w-4 h-4 text-[#2563EB] shrink-0 mt-0.5" />
+            <ShieldAlert className="w-4 h-4 text-[#3B82F6] shrink-0 mt-0.5" />
             <p className="text-xs font-medium text-[#F8FAFC] leading-relaxed">
               {toastAlert}
             </p>
@@ -230,6 +286,97 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
         </div>
       )}
 
+      {/* Banner de Éxito cuando el turno fue confirmado (Retorno de Mercado Pago o Webhook) */}
+      {confirmedSlotInfo && (
+        <section className="p-4 sm:p-5 rounded-xl bg-[#0F172A] border border-[#2563EB] space-y-3.5 shadow-lg">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-[#2563EB]/15 border border-[#2563EB]/40 flex items-center justify-center text-[#3B82F6] shrink-0">
+                <CheckCircle2 className="w-5 h-5" />
+              </div>
+              <div>
+                <span className="text-xs font-semibold text-[#3B82F6] block">
+                  Seña acreditada · $2.000 ARS · ID{' '}
+                  {confirmedSlotInfo.mpPaymentId}
+                </span>
+                <h3 className="text-sm sm:text-base font-semibold text-[#F8FAFC]">
+                  ¡Tu turno de 30 minutos ya está confirmado!
+                </h3>
+              </div>
+            </div>
+          </div>
+
+          {(() => {
+            const startIso =
+              confirmedSlotInfo.startTimeIso ||
+              new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+            const endIso =
+              confirmedSlotInfo.endTimeIso ||
+              new Date(
+                new Date(startIso).getTime() + 30 * 60 * 1000,
+              ).toISOString();
+            const gcalUrl = buildGoogleCalendarUrl({
+              shopName: schedule.barber.shop_name,
+              address: schedule.barber.address,
+              barberName: schedule.barber.barber_name,
+              startTimeIso: startIso,
+              endTimeIso: endIso,
+              mpPaymentId: confirmedSlotInfo.mpPaymentId,
+              depositAmountArs: 2000,
+            });
+            const waUrl = buildWhatsAppShareUrl({
+              barberPhone:
+                confirmedSlotInfo.barberPhone || schedule.barber.barber_phone,
+              startTimeIso: startIso,
+              mpPaymentId: confirmedSlotInfo.mpPaymentId,
+            });
+
+            return (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <a
+                  href={gcalUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="min-h-[44px] px-3 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] text-[#F8FAFC] text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
+                >
+                  <CalendarPlus className="w-4 h-4 shrink-0" />
+                  <span>Google Calendar</span>
+                </a>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    api.downloadSlotIcs({
+                      slotId: confirmedSlotInfo.slotId,
+                      shopName: schedule.barber.shop_name,
+                      address: schedule.barber.address,
+                      barberName: schedule.barber.barber_name,
+                      startTimeIso: startIso,
+                      endTimeIso: endIso,
+                      mpPaymentId: confirmedSlotInfo.mpPaymentId,
+                    })
+                  }
+                  className="min-h-[44px] px-3 rounded-lg bg-[#090D16] border border-[#1E293B] hover:border-[#334155] text-[#F8FAFC] text-xs font-medium flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <Download className="w-4 h-4 text-[#3B82F6] shrink-0" />
+                  <span>Descargar .ICS</span>
+                </button>
+
+                <a
+                  href={waUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="min-h-[44px] px-3 rounded-lg bg-[#090D16] border border-[#1E293B] hover:border-[#334155] text-[#F8FAFC] text-xs font-medium flex items-center justify-center gap-1.5 transition-colors"
+                >
+                  <MessageCircle className="w-4 h-4 text-[#3B82F6] shrink-0" />
+                  <span>Avisar por WhatsApp</span>
+                </a>
+              </div>
+            );
+          })()}
+        </section>
+      )}
+
       {/* 1. BARRA DE SELECCIÓN DE DÍA (En Primera Pantalla Móvil sin scroll) */}
       <section className="space-y-2">
         <div className="flex items-center justify-between px-0.5">
@@ -242,8 +389,8 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
         </div>
 
         {dateKeys.length === 0 ? (
-          <div className="p-6 rounded-lg bg-[#0F172A] border border-[#1E293B] text-center space-y-2">
-            <CalendarX2 className="w-6 h-6 text-[#2563EB] mx-auto" />
+          <div className="p-6 rounded-xl bg-[#0F172A] border border-[#1E293B] text-center space-y-2">
+            <CalendarX2 className="w-6 h-6 text-[#3B82F6] mx-auto" />
             <p className="text-sm font-semibold text-[#F8FAFC]">
               Sin turnos disponibles por el momento
             </p>
@@ -294,7 +441,7 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
       {selectedDate && (
         <section className="space-y-3">
           {slotsForSelectedDate.length === 0 ? (
-            <div className="p-6 rounded-lg bg-[#0F172A] border border-[#1E293B] text-center space-y-2">
+            <div className="p-6 rounded-xl bg-[#0F172A] border border-[#1E293B] text-center space-y-2">
               <CalendarX2 className="w-6 h-6 text-[#94A3B8] mx-auto" />
               <p className="text-sm font-semibold text-[#F8FAFC]">
                 No quedan horarios libres en este día
@@ -307,7 +454,7 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
             <div className="space-y-3">
               {/* Bloque Mañana */}
               {morningSlots.length > 0 && (
-                <div className="p-3.5 rounded-lg bg-[#0F172A] border border-[#1E293B] space-y-2.5">
+                <div className="p-3.5 rounded-xl bg-[#0F172A] border border-[#1E293B] space-y-2.5">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-semibold text-[#94A3B8]">
                       Mañana
@@ -343,7 +490,7 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
 
               {/* Bloque Tarde */}
               {afternoonSlots.length > 0 && (
-                <div className="p-3.5 rounded-lg bg-[#0F172A] border border-[#1E293B] space-y-2.5">
+                <div className="p-3.5 rounded-xl bg-[#0F172A] border border-[#1E293B] space-y-2.5">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-semibold text-[#94A3B8]">
                       Tarde
@@ -381,122 +528,32 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
         </section>
       )}
 
-      {/* Banner de Éxito cuando el turno fue confirmado */}
-      {confirmedSlotInfo && (
-        <section className="p-4 rounded-sm bg-[#121214] border border-[#D49A2A] space-y-3">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2.5">
-              <div className="w-9 h-9 rounded-sm bg-[#D49A2A]/15 border border-[#D49A2A]/40 flex items-center justify-center text-[#D49A2A] shrink-0">
-                <CheckCircle2 className="w-5 h-5" />
-              </div>
-              <div>
-                <span className="font-mono-code text-xs font-medium text-[#D49A2A]">
-                  Seña confirmada · $2.000 ARS
-                </span>
-                <h3 className="font-display text-sm font-bold uppercase text-[#F2EFE9]">
-                  ¡Tu turno ya está reservado!
-                </h3>
-              </div>
-            </div>
-          </div>
-
-          {(() => {
-            const startIso =
-              confirmedSlotInfo.startTimeIso ||
-              new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-            const endIso =
-              confirmedSlotInfo.endTimeIso ||
-              new Date(
-                new Date(startIso).getTime() + 30 * 60 * 1000,
-              ).toISOString();
-            const gcalUrl = buildGoogleCalendarUrl({
-              shopName: schedule.barber.shop_name,
-              address: schedule.barber.address,
-              barberName: schedule.barber.barber_name,
-              startTimeIso: startIso,
-              endTimeIso: endIso,
-              mpPaymentId: confirmedSlotInfo.mpPaymentId,
-              depositAmountArs: 2000,
-            });
-            const waUrl = buildWhatsAppShareUrl({
-              barberPhone:
-                confirmedSlotInfo.barberPhone || schedule.barber.barber_phone,
-              startTimeIso: startIso,
-              mpPaymentId: confirmedSlotInfo.mpPaymentId,
-            });
-
-            return (
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                <a
-                  href={gcalUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="min-h-[44px] px-3 rounded-sm bg-[#D49A2A] hover:bg-[#b8831f] text-[#0A0A0B] font-display text-xs uppercase font-extrabold tracking-wider flex items-center justify-center gap-1.5 transition-colors"
-                >
-                  <CalendarPlus className="w-4 h-4 shrink-0" />
-                  <span>Google Calendar</span>
-                </a>
-
-                <button
-                  type="button"
-                  onClick={() =>
-                    api.downloadSlotIcs({
-                      slotId: confirmedSlotInfo.slotId,
-                      shopName: schedule.barber.shop_name,
-                      address: schedule.barber.address,
-                      barberName: schedule.barber.barber_name,
-                      startTimeIso: startIso,
-                      endTimeIso: endIso,
-                      mpPaymentId: confirmedSlotInfo.mpPaymentId,
-                    })
-                  }
-                  className="min-h-[44px] px-3 rounded-sm bg-[#0A0A0B] border border-[#242428] text-[#F2EFE9] text-xs font-medium flex items-center justify-center gap-1.5 transition-colors"
-                >
-                  <Download className="w-4 h-4 text-[#D49A2A] shrink-0" />
-                  <span>Descargar .ICS</span>
-                </button>
-
-                <a
-                  href={waUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="min-h-[44px] px-3 rounded-sm bg-[#0A0A0B] border border-[#242428] text-[#F2EFE9] text-xs font-medium flex items-center justify-center gap-1.5 transition-colors"
-                >
-                  <MessageCircle className="w-4 h-4 text-[#D49A2A] shrink-0" />
-                  <span>Avisar por WhatsApp</span>
-                </a>
-              </div>
-            );
-          })()}
-        </section>
-      )}
-
       {/* Footer discreto con botón "Acceso Barberos" */}
       {onOpenBarberAccess && (
         <footer className="pt-6 pb-2 flex items-center justify-center">
           <button
             type="button"
             onClick={onOpenBarberAccess}
-            className="px-3 py-1.5 rounded-sm bg-[#121214] border border-[#242428] hover:border-[#D49A2A] text-[#8A8A93] hover:text-[#F2EFE9] font-mono-code text-[11px] inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+            className="px-3.5 py-2 rounded-lg bg-[#0F172A] border border-[#1E293B] hover:border-[#3B82F6] text-[#94A3B8] hover:text-[#F8FAFC] text-xs font-medium inline-flex items-center gap-1.5 transition-colors cursor-pointer"
           >
-            <KeyRound className="w-3 h-3 text-[#D49A2A]" />
+            <KeyRound className="w-3.5 h-3.5 text-[#3B82F6]" />
             <span>Acceso Barberos</span>
           </button>
         </footer>
       )}
 
       {/* 3. BARRA INFERIOR FIJA (Sticky Bottom Bar) de 60px */}
-      <div className="fixed bottom-0 left-0 right-0 z-30 h-[60px] bg-[#121214]/95 backdrop-blur-md border-t border-[#242428] px-3.5 sm:px-6 flex items-center">
+      <div className="fixed bottom-0 left-0 right-0 z-30 h-[64px] bg-[#0F172A]/95 backdrop-blur-md border-t border-[#1E293B] px-3.5 sm:px-6 flex items-center">
         <div className="max-w-3xl w-full mx-auto flex items-center justify-between gap-3">
           {!selectedSlot ? (
-            <div className="w-full text-center text-sm font-medium text-[#8A8A93]">
+            <div className="w-full text-center text-sm font-medium text-[#94A3B8]">
               Seleccioná un horario para reservar
             </div>
           ) : (
             <div className="w-full flex items-center gap-3">
-              <div className="hidden sm:flex items-center gap-1.5 font-mono-code text-xs font-medium text-[#8A8A93] shrink-0">
-                <Clock className="w-3.5 h-3.5 text-[#D49A2A]" />
-                <span className="text-[#F2EFE9] font-semibold">
+              <div className="hidden sm:flex items-center gap-1.5 text-xs font-medium text-[#94A3B8] shrink-0">
+                <Clock className="w-3.5 h-3.5 text-[#3B82F6]" />
+                <span className="text-[#F8FAFC] font-semibold">
                   {formatDateHeader(selectedDate).dayName}{' '}
                   {formatDateHeader(selectedDate).dayNumber} ·{' '}
                   {formatTime30m(selectedSlot.start_time)} hs
@@ -510,7 +567,7 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
                   setConfirmError(null);
                   setIsConfirmSheetOpen(true);
                 }}
-                className="w-full h-[44px] px-4 rounded-sm bg-[#D49A2A] hover:bg-[#b8831f] disabled:opacity-50 text-[#0A0A0B] font-display text-xs sm:text-sm uppercase font-extrabold tracking-wider flex items-center justify-center gap-2 transition-colors cursor-pointer pointer-events-auto"
+                className="w-full h-[46px] px-4 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-50 text-[#F8FAFC] text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer pointer-events-auto"
               >
                 <span>
                   {isBusy
@@ -523,9 +580,9 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
         </div>
       </div>
 
-      {/* 4. MODAL / BOTTOM-SHEET GUEST CHECKOUT (100% Invitado: Solo Nombre, DNI y WhatsApp -> Redirección Real a MP) */}
+      {/* 4. MODAL / BOTTOM-SHEET GUEST CHECKOUT (100% Invitado: Solo Nombre, DNI y WhatsApp -> Redirección a MP) */}
       {isConfirmSheetOpen && selectedSlot && (
-        <div className="fixed inset-0 z-50 h-[100dvh] flex items-end sm:items-center justify-center bg-[#0A0A0B]/85 backdrop-blur-xs p-0 sm:p-4 pointer-events-auto">
+        <div className="fixed inset-0 z-50 h-[100dvh] flex items-end sm:items-center justify-center bg-[#090D16]/85 backdrop-blur-xs p-0 sm:p-4 pointer-events-auto">
           <div
             className="fixed inset-0 z-40"
             onClick={() => {
@@ -533,13 +590,13 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
             }}
           />
 
-          <div className="relative z-50 w-full max-w-md bg-[#121214] border-t sm:border border-[#242428] rounded-t-md sm:rounded-sm p-5 space-y-4 max-h-[90dvh] overflow-y-auto pointer-events-auto shadow-2xl">
-            <div className="flex items-center justify-between gap-3 border-b border-[#242428] pb-3">
+          <div className="relative z-50 w-full max-w-md bg-[#0F172A] border-t sm:border border-[#1E293B] rounded-t-xl sm:rounded-xl p-5 space-y-4 max-h-[90dvh] overflow-y-auto pointer-events-auto shadow-2xl">
+            <div className="flex items-center justify-between gap-3 border-b border-[#1E293B] pb-3">
               <div>
-                <h2 className="font-display text-sm sm:text-base font-extrabold uppercase tracking-wider text-[#F2EFE9]">
+                <h2 className="text-sm sm:text-base font-semibold text-[#F8FAFC]">
                   Confirmar turno · {formatTime30m(selectedSlot.start_time)} hs
                 </h2>
-                <p className="font-mono-code text-xs text-[#8A8A93]">
+                <p className="text-xs text-[#94A3B8] mt-0.5">
                   {formatDateHeader(selectedDate).dayName}{' '}
                   {formatDateHeader(selectedDate).dayNumber}{' '}
                   {formatDateHeader(selectedDate).monthShort} ·{' '}
@@ -552,22 +609,22 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
                 onClick={() => setIsConfirmSheetOpen(false)}
                 disabled={isBusy}
                 aria-label="Cerrar"
-                className="w-9 h-9 rounded-sm bg-[#0A0A0B] border border-[#242428] hover:border-[#D49A2A] flex items-center justify-center text-[#8A8A93] hover:text-[#F2EFE9] cursor-pointer"
+                className="w-9 h-9 rounded-lg bg-[#090D16] border border-[#1E293B] hover:border-[#334155] flex items-center justify-center text-[#94A3B8] hover:text-[#F8FAFC] cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
             {confirmError && (
-              <div className="p-3 rounded-sm bg-[#0A0A0B] border border-[#C85A32] flex items-center gap-2 font-mono-code text-xs text-[#F2EFE9]">
-                <ShieldAlert className="w-4 h-4 text-[#C85A32] shrink-0" />
+              <div className="p-3 rounded-lg bg-[#090D16] border border-[#334155] flex items-center gap-2 text-xs text-[#F8FAFC]">
+                <ShieldAlert className="w-4 h-4 text-[#3B82F6] shrink-0" />
                 <span>{confirmError}</span>
               </div>
             )}
 
             <form onSubmit={handleConfirmSheetSubmit} className="space-y-3">
               <div>
-                <label className="block font-display text-[10px] uppercase tracking-wider text-[#8A8A93] mb-1">
+                <label className="block text-xs font-medium text-[#94A3B8] mb-1">
                   Nombre y Apellido
                 </label>
                 <input
@@ -577,12 +634,12 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
                   placeholder="Tu nombre y apellido"
                   value={confirmName}
                   onChange={(e) => setConfirmName(e.target.value)}
-                  className="w-full min-h-[46px] px-3.5 rounded-sm bg-[#0A0A0B] border border-[#242428] focus:border-[#D49A2A] focus:outline-none text-sm text-[#F2EFE9]"
+                  className="w-full min-h-[46px] px-3.5 rounded-lg bg-[#090D16] border border-[#1E293B] focus:border-[#2563EB] focus:outline-none text-sm text-[#F8FAFC]"
                 />
               </div>
 
               <div>
-                <label className="block font-display text-[10px] uppercase tracking-wider text-[#8A8A93] mb-1">
+                <label className="block text-xs font-medium text-[#94A3B8] mb-1">
                   DNI
                 </label>
                 <input
@@ -596,12 +653,12 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
                   onChange={(e) =>
                     setConfirmDni(e.target.value.replace(/\D/g, ''))
                   }
-                  className="w-full min-h-[46px] px-3.5 rounded-sm bg-[#0A0A0B] border border-[#242428] focus:border-[#D49A2A] focus:outline-none font-mono-code text-sm text-[#F2EFE9]"
+                  className="w-full min-h-[46px] px-3.5 rounded-lg bg-[#090D16] border border-[#1E293B] focus:border-[#2563EB] focus:outline-none text-sm text-[#F8FAFC]"
                 />
               </div>
 
               <div>
-                <label className="block font-display text-[10px] uppercase tracking-wider text-[#8A8A93] mb-1">
+                <label className="block text-xs font-medium text-[#94A3B8] mb-1">
                   WhatsApp
                 </label>
                 <input
@@ -612,11 +669,11 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
                   placeholder="Ej: 11 5566 7788"
                   value={confirmPhone}
                   onChange={(e) => setConfirmPhone(e.target.value)}
-                  className="w-full min-h-[46px] px-3.5 rounded-sm bg-[#0A0A0B] border border-[#242428] focus:border-[#D49A2A] focus:outline-none font-mono-code text-sm text-[#F2EFE9]"
+                  className="w-full min-h-[46px] px-3.5 rounded-lg bg-[#090D16] border border-[#1E293B] focus:border-[#2563EB] focus:outline-none text-sm text-[#F8FAFC]"
                 />
               </div>
 
-              <p className="text-[11px] text-[#8A8A93]">
+              <p className="text-[11px] text-[#94A3B8]">
                 Sin registro ni cuenta. La seña de $2.000 ARS asegura tu turno y
                 no es reembolsable por inasistencia.
               </p>
@@ -624,7 +681,7 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
               <button
                 type="submit"
                 disabled={isBusy}
-                className="w-full min-h-[48px] rounded-sm bg-[#D49A2A] hover:bg-[#b8831f] disabled:opacity-60 text-[#0A0A0B] font-display text-xs uppercase font-extrabold tracking-wider flex items-center justify-center gap-2 transition-colors cursor-pointer pointer-events-auto"
+                className="w-full min-h-[48px] rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-60 text-[#F8FAFC] text-sm font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer pointer-events-auto"
               >
                 {isBusy ? (
                   <>
@@ -642,6 +699,36 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* 5. MODAL SANDBOX DESACOPLADO (Solo activo en entorno local de desarrollo) */}
+      {import.meta.env.DEV &&
+        onSimulateWebhook &&
+        onSimulateRejectedWebhook &&
+        onReleaseLock && (
+          <SandboxCheckoutModal
+            isOpen={isSandboxCheckoutOpen}
+            onClose={() => onSetSandboxCheckoutOpen?.(false)}
+            activeLock={activeLock}
+            shopName={schedule.barber.shop_name}
+            barberSlug={slug}
+            user={
+              confirmDni
+                ? {
+                    id: 'guest',
+                    dni: confirmDni,
+                    name: confirmName || 'Invitado',
+                    phone: confirmPhone,
+                    role: 'CLIENT',
+                  }
+                : null
+            }
+            remainingSeconds={remainingSeconds}
+            countdownFormatted={countdownFormatted}
+            onSimulateApproved={onSimulateWebhook}
+            onSimulateRejected={onSimulateRejectedWebhook}
+            onReleaseLock={onReleaseLock}
+          />
+        )}
     </div>
   );
 };

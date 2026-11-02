@@ -10,7 +10,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 };
 var AppointmentsService_1;
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.AppointmentsService = exports.LOCK_DURATION_MS = exports.SLOT_DURATION_MS = void 0;
+exports.AppointmentsService = exports.ARGENTINA_UTC_OFFSET_MS = exports.LOCK_DURATION_MS = exports.SLOT_DURATION_MS = void 0;
 const common_1 = require("@nestjs/common");
 const jwt_1 = require("@nestjs/jwt");
 const client_1 = require("@prisma/client");
@@ -21,6 +21,7 @@ const prisma_service_1 = require("../prisma/prisma.service");
 const weekly_bonus_util_1 = require("./weekly-bonus.util");
 exports.SLOT_DURATION_MS = 30 * 60 * 1000;
 exports.LOCK_DURATION_MS = 10 * 60 * 1000;
+exports.ARGENTINA_UTC_OFFSET_MS = 3 * 60 * 60 * 1000;
 let AppointmentsService = AppointmentsService_1 = class AppointmentsService {
     constructor(prisma, paymentsService, mailService, jwtService) {
         this.prisma = prisma;
@@ -49,6 +50,23 @@ let AppointmentsService = AppointmentsService_1 = class AppointmentsService {
                 },
             });
             if (existingSlot) {
+                if (existingSlot.status === client_1.SlotStatus.CANCELLED) {
+                    const reactivatedSlot = await this.prisma.appointmentSlot.update({
+                        where: { id: existingSlot.id },
+                        data: {
+                            status: client_1.SlotStatus.AVAILABLE,
+                            client_id: null,
+                            locked_until: null,
+                            mp_payment_id: null,
+                            mp_preference_id: null,
+                            deposit_amount: payments_service_1.PLATFORM_DEPOSIT_ARS,
+                        },
+                    });
+                    return {
+                        action: 'CREATED',
+                        slot: reactivatedSlot,
+                    };
+                }
                 if (existingSlot.status !== client_1.SlotStatus.AVAILABLE) {
                     throw new common_1.BadRequestException(`No se puede eliminar un turno que está en estado ${existingSlot.status}`);
                 }
@@ -77,8 +95,7 @@ let AppointmentsService = AppointmentsService_1 = class AppointmentsService {
         if (dto.start_time && dto.end_time) {
             const targetDates = this.resolveTargetDates(dto.date, dto.end_date);
             const slotsToCreate = [];
-            let globalRangeStart = null;
-            let globalRangeEnd = null;
+            const generatedStartTimes = [];
             for (const currentDate of targetDates) {
                 const rangeStart = this.parseDateTime(dto.start_time, currentDate);
                 const rangeEnd = this.parseDateTime(dto.end_time, currentDate);
@@ -104,12 +121,6 @@ let AppointmentsService = AppointmentsService_1 = class AppointmentsService {
                     breakStartMs = breakStart.getTime();
                     breakEndMs = breakEnd.getTime();
                 }
-                if (!globalRangeStart || rangeStart < globalRangeStart) {
-                    globalRangeStart = rangeStart;
-                }
-                if (!globalRangeEnd || rangeEnd > globalRangeEnd) {
-                    globalRangeEnd = rangeEnd;
-                }
                 for (let cursor = rangeStart.getTime(); cursor < rangeEnd.getTime(); cursor += exports.SLOT_DURATION_MS) {
                     if (breakStartMs !== null &&
                         breakEndMs !== null &&
@@ -117,25 +128,43 @@ let AppointmentsService = AppointmentsService_1 = class AppointmentsService {
                         cursor < breakEndMs) {
                         continue;
                     }
+                    const slotStart = new Date(cursor);
+                    generatedStartTimes.push(slotStart);
                     slotsToCreate.push({
                         barber_id: barber.id,
-                        start_time: new Date(cursor),
+                        start_time: slotStart,
                         end_time: new Date(cursor + exports.SLOT_DURATION_MS),
                         status: client_1.SlotStatus.AVAILABLE,
                         deposit_amount: payments_service_1.PLATFORM_DEPOSIT_ARS,
                     });
                 }
             }
+            const reactivated = generatedStartTimes.length > 0
+                ? await this.prisma.appointmentSlot.updateMany({
+                    where: {
+                        barber_id: barber.id,
+                        status: client_1.SlotStatus.CANCELLED,
+                        start_time: { in: generatedStartTimes },
+                    },
+                    data: {
+                        status: client_1.SlotStatus.AVAILABLE,
+                        client_id: null,
+                        locked_until: null,
+                        mp_payment_id: null,
+                        mp_preference_id: null,
+                        deposit_amount: payments_service_1.PLATFORM_DEPOSIT_ARS,
+                    },
+                })
+                : { count: 0 };
             const created = await this.prisma.appointmentSlot.createMany({
                 data: slotsToCreate,
                 skipDuplicates: true,
             });
-            const slotsInRange = globalRangeStart && globalRangeEnd
+            const slotsInRange = generatedStartTimes.length > 0
                 ? await this.prisma.appointmentSlot.findMany({
                     where: {
                         barber_id: barber.id,
-                        start_time: { gte: globalRangeStart },
-                        end_time: { lte: globalRangeEnd },
+                        start_time: { in: generatedStartTimes },
                     },
                     orderBy: { start_time: 'asc' },
                 })
@@ -143,7 +172,7 @@ let AppointmentsService = AppointmentsService_1 = class AppointmentsService {
             return {
                 action: 'RANGE_GENERATED',
                 days_processed: targetDates.length,
-                generated_count: created.count,
+                generated_count: created.count + reactivated.count,
                 total_blocks_in_range: slotsInRange.length,
                 slots: slotsInRange,
             };
@@ -266,12 +295,29 @@ let AppointmentsService = AppointmentsService_1 = class AppointmentsService {
         if (!slot) {
             throw new common_1.NotFoundException('El turno indicado no existe');
         }
-        const isOwnerClient = slot.client_id === user.sub;
+        const isOwnerClient = Boolean(slot.client_id && slot.client_id === user.sub);
         const isOwnerBarber = slot.barber.user_id === user.sub;
         const isSuperAdmin = user.role === client_1.Role.SUPERADMIN;
         if (!isOwnerClient && !isOwnerBarber && !isSuperAdmin) {
             throw new common_1.ForbiddenException('No tenés permisos para cancelar este turno');
         }
+        if (slot.status === client_1.SlotStatus.AVAILABLE) {
+            throw new common_1.BadRequestException('No se puede cancelar un turno que se encuentra libre y sin reserva activa');
+        }
+        if (slot.status === client_1.SlotStatus.CANCELLED) {
+            return {
+                cancelled: true,
+                slot_id: slot.id,
+                status: slot.status,
+                refund_executed: false,
+                deposit_retained: Boolean(slot.mp_payment_id),
+                deposit_amount_retained_ars: slot.mp_payment_id
+                    ? slot.deposit_amount
+                    : 0,
+                policy: payments_service_1.NON_REFUNDABLE_DEPOSIT_POLICY,
+            };
+        }
+        const hadPaidDeposit = slot.status === client_1.SlotStatus.CONFIRMED || Boolean(slot.mp_payment_id);
         const updatedSlot = await this.prisma.$transaction(async (tx) => {
             await tx.reminderQueue.updateMany({
                 where: {
@@ -290,18 +336,45 @@ let AppointmentsService = AppointmentsService_1 = class AppointmentsService {
                 },
             });
         });
-        this.logger.log(`🚫 Turno ${slot.id} cancelado por usuario ${user.dni}. Seña de $${slot.deposit_amount} ARS retenida (NO REEMBOLSABLE - Sin llamada a refund de Mercado Pago).`);
+        this.logger.log(`🚫 Turno ${slot.id} cancelado por usuario ${user.dni}. Seña retenida: ${hadPaidDeposit ? `$${slot.deposit_amount} ARS` : '$0 ARS'} (NO REEMBOLSABLE - Sin llamada a refund de Mercado Pago).`);
         return {
             cancelled: true,
             slot_id: updatedSlot.id,
             status: updatedSlot.status,
             refund_executed: false,
-            deposit_retained: true,
-            deposit_amount_retained_ars: updatedSlot.deposit_amount,
+            deposit_retained: hadPaidDeposit,
+            deposit_amount_retained_ars: hadPaidDeposit
+                ? updatedSlot.deposit_amount
+                : 0,
             policy: payments_service_1.NON_REFUNDABLE_DEPOSIT_POLICY,
         };
     }
-    async releaseSingleLock(slotId) {
+    async releaseSingleLock(slotId, clientDni, preferenceId) {
+        const slot = await this.prisma.appointmentSlot.findUnique({
+            where: { id: slotId },
+            include: { client: true },
+        });
+        if (!slot || slot.status !== client_1.SlotStatus.PENDING_PAYMENT) {
+            return {
+                released: false,
+                slot_id: slotId,
+            };
+        }
+        const now = new Date();
+        const isExpired = Boolean(slot.locked_until && slot.locked_until <= now);
+        if (!isExpired) {
+            if (clientDni) {
+                const cleanDni = clientDni.replace(/\D/g, '');
+                if (slot.client?.dni && slot.client.dni !== cleanDni) {
+                    throw new common_1.ForbiddenException('No tenés permisos para liberar el bloqueo de otro cliente');
+                }
+            }
+            if (preferenceId &&
+                slot.mp_preference_id &&
+                slot.mp_preference_id !== preferenceId) {
+                throw new common_1.ForbiddenException('La preferencia indicada no coincide con el bloqueo activo');
+            }
+        }
         const result = await this.prisma.appointmentSlot.updateMany({
             where: {
                 id: slotId,
@@ -332,11 +405,12 @@ let AppointmentsService = AppointmentsService_1 = class AppointmentsService {
         if (!barber) {
             throw new common_1.NotFoundException(`No se encontró ninguna barbería con el identificador "${slug}"`);
         }
+        const nowArgentinaNominal = new Date(Date.now() - exports.ARGENTINA_UTC_OFFSET_MS);
         const availableSlots = await this.prisma.appointmentSlot.findMany({
             where: {
                 barber_id: barber.id,
                 status: client_1.SlotStatus.AVAILABLE,
-                start_time: { gte: new Date() },
+                start_time: { gte: nowArgentinaNominal },
             },
             orderBy: { start_time: 'asc' },
             select: {
@@ -394,6 +468,10 @@ let AppointmentsService = AppointmentsService_1 = class AppointmentsService {
                             status: client_1.SlotStatus.PENDING_PAYMENT,
                             locked_until: { lt: now },
                         },
+                        {
+                            status: client_1.SlotStatus.PENDING_PAYMENT,
+                            client_id: resolvedAuth.user.id,
+                        },
                     ],
                 },
                 data: {
@@ -411,36 +489,58 @@ let AppointmentsService = AppointmentsService_1 = class AppointmentsService {
                 include: { barber: true },
             });
         });
-        const preference = await this.paymentsService.createDepositPreference({
-            slotId: lockedSlot.id,
-            shopName: lockedSlot.barber.shop_name,
-            startTime: lockedSlot.start_time,
-            clientDni: resolvedAuth.user.dni,
-        });
-        const updatedSlot = await this.prisma.appointmentSlot.update({
-            where: { id: lockedSlot.id },
-            data: {
-                mp_preference_id: preference.preference_id,
-            },
-        });
-        return {
-            slot: {
-                id: updatedSlot.id,
-                barber_id: updatedSlot.barber_id,
-                client_id: updatedSlot.client_id,
-                start_time: updatedSlot.start_time,
-                end_time: updatedSlot.end_time,
-                status: updatedSlot.status,
-                locked_until: updatedSlot.locked_until,
-                deposit_amount: updatedSlot.deposit_amount,
-                mp_preference_id: updatedSlot.mp_preference_id,
-            },
-            payment: preference,
-            ...(resolvedAuth.access_token && {
-                access_token: resolvedAuth.access_token,
-                user: resolvedAuth.user,
-            }),
-        };
+        try {
+            const preference = await this.paymentsService.createDepositPreference({
+                slotId: lockedSlot.id,
+                shopName: lockedSlot.barber.shop_name,
+                barberSlug: lockedSlot.barber.slug,
+                startTime: lockedSlot.start_time,
+                clientDni: resolvedAuth.user.dni,
+                clientName: resolvedAuth.user.name,
+            });
+            const updatedSlot = await this.prisma.appointmentSlot.update({
+                where: { id: lockedSlot.id },
+                data: {
+                    mp_preference_id: preference.preference_id,
+                },
+            });
+            return {
+                slot: {
+                    id: updatedSlot.id,
+                    barber_id: updatedSlot.barber_id,
+                    client_id: updatedSlot.client_id,
+                    start_time: updatedSlot.start_time,
+                    end_time: updatedSlot.end_time,
+                    status: updatedSlot.status,
+                    locked_until: updatedSlot.locked_until,
+                    deposit_amount: updatedSlot.deposit_amount,
+                    mp_preference_id: updatedSlot.mp_preference_id,
+                },
+                payment: preference,
+                ...(resolvedAuth.access_token && {
+                    access_token: resolvedAuth.access_token,
+                    user: resolvedAuth.user,
+                }),
+            };
+        }
+        catch (err) {
+            await this.prisma.appointmentSlot
+                .updateMany({
+                where: {
+                    id: lockedSlot.id,
+                    status: client_1.SlotStatus.PENDING_PAYMENT,
+                    client_id: resolvedAuth.user.id,
+                },
+                data: {
+                    status: client_1.SlotStatus.AVAILABLE,
+                    client_id: null,
+                    locked_until: null,
+                    mp_preference_id: null,
+                },
+            })
+                .catch(() => undefined);
+            throw err;
+        }
     }
     async releaseExpiredLocks() {
         const now = new Date();
@@ -481,17 +581,18 @@ let AppointmentsService = AppointmentsService_1 = class AppointmentsService {
             }
         }
         if (!dto?.dni || !dto?.password) {
-            throw new common_1.UnauthorizedException('Debés iniciar sesión con tu DNI y contraseña para señar el turno');
+            throw new common_1.UnauthorizedException('Debés indicar tu DNI para reservar el turno');
         }
+        const cleanDni = dto.dni.replace(/\D/g, '');
         let user = await this.prisma.user.findUnique({
-            where: { dni: dto.dni },
+            where: { dni: cleanDni },
         });
         if (user) {
             const isPasswordValid = await bcrypt.compare(dto.password, user.password);
             if (!isPasswordValid) {
                 throw new common_1.UnauthorizedException('DNI o contraseña incorrectos');
             }
-            if (dto.email && !user.email) {
+            if (dto.email && !user.email && user.role === client_1.Role.CLIENT) {
                 user = await this.prisma.user.update({
                     where: { id: user.id },
                     data: { email: dto.email },
@@ -502,9 +603,9 @@ let AppointmentsService = AppointmentsService_1 = class AppointmentsService {
             const hashedPassword = await bcrypt.hash(dto.password, 10);
             user = await this.prisma.user.create({
                 data: {
-                    dni: dto.dni,
+                    dni: cleanDni,
                     password: hashedPassword,
-                    name: dto.name || `Cliente ${dto.dni}`,
+                    name: dto.name || `Cliente ${cleanDni}`,
                     phone: dto.phone || '',
                     email: dto.email || null,
                     role: client_1.Role.CLIENT,

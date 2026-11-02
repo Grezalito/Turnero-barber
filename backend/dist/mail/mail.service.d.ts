@@ -24,6 +24,7 @@ export declare class MailService {
     private readonly fromAddress;
     constructor(configService: ConfigService);
     formatIcsUtcDate(date: Date): string;
+    formatArgentinaSlotToUtcIcsDate(nominalDate: Date): string;
     buildIcsCalendar(payload: IcsAppointmentPayload): string;
     sendAppointmentConfirmationEmails(payload: ConfirmationEmailPayload): Promise<{
         clientEmailSent: boolean;

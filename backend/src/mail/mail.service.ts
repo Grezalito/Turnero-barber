@@ -59,13 +59,23 @@ export class MailService {
   }
 
   /**
+   * Convierte el horario nominal del turno (almacenado en HH:mm UTC nominal para Argentina UTC-3)
+   * al instante real UTC (+3 horas) para que Google Calendar, Apple Calendar y Outlook en Argentina
+   * agenden el evento en la hora local exacta.
+   */
+  formatArgentinaSlotToUtcIcsDate(nominalDate: Date): string {
+    const realUtcDate = new Date(nominalDate.getTime() + 3 * 60 * 60 * 1000);
+    return this.formatIcsUtcDate(realUtcDate);
+  }
+
+  /**
    * Genera contenido .ICS compatible con Apple Calendar, Outlook y Google Calendar
    * para el turno estricto de 30 minutos.
    */
   buildIcsCalendar(payload: IcsAppointmentPayload): string {
     const nowUtc = this.formatIcsUtcDate(new Date());
-    const startUtc = this.formatIcsUtcDate(payload.startTime);
-    const endUtc = this.formatIcsUtcDate(payload.endTime);
+    const startUtc = this.formatArgentinaSlotToUtcIcsDate(payload.startTime);
+    const endUtc = this.formatArgentinaSlotToUtcIcsDate(payload.endTime);
     const location = payload.address || payload.shopName;
     const summary = `Corte de Barbería (30 min) - ${payload.shopName}`;
     const descriptionLines = [

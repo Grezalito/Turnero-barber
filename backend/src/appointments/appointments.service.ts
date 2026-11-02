@@ -27,6 +27,7 @@ import {
 
 export const SLOT_DURATION_MS = 30 * 60 * 1000; // Estrictamente 30 minutos
 export const LOCK_DURATION_MS = 10 * 60 * 1000; // Bloqueo temporal de 10 minutos
+export const ARGENTINA_UTC_OFFSET_MS = 3 * 60 * 60 * 1000; // UTC-3 (America/Argentina/Buenos_Aires)
 
 @Injectable()
 export class AppointmentsService {
@@ -41,7 +42,7 @@ export class AppointmentsService {
 
   /**
    * Permite al barbero logueado:
-   * 1) Alternar (activar/borrar) un bloque puntual de 30 min si está en AVAILABLE (`slot_start_time`).
+   * 1) Alternar (activar/borrar) un bloque puntual de 30 min si está en AVAILABLE o reactivar si está en CANCELLED (`slot_start_time`).
    * 2) Generar bloques exactos de 30 minutos a partir de un rango horario (`start_time` y `end_time`).
    */
   async manageBarberSlots(userId: string, dto: ManageBarberSlotsDto) {
@@ -71,6 +72,25 @@ export class AppointmentsService {
       });
 
       if (existingSlot) {
+        if (existingSlot.status === SlotStatus.CANCELLED) {
+          const reactivatedSlot = await this.prisma.appointmentSlot.update({
+            where: { id: existingSlot.id },
+            data: {
+              status: SlotStatus.AVAILABLE,
+              client_id: null,
+              locked_until: null,
+              mp_payment_id: null,
+              mp_preference_id: null,
+              deposit_amount: PLATFORM_DEPOSIT_ARS,
+            },
+          });
+
+          return {
+            action: 'CREATED',
+            slot: reactivatedSlot,
+          };
+        }
+
         if (existingSlot.status !== SlotStatus.AVAILABLE) {
           throw new BadRequestException(
             `No se puede eliminar un turno que está en estado ${existingSlot.status}`,
@@ -103,7 +123,7 @@ export class AppointmentsService {
       };
     }
 
-    // Modo 2: Generar bloques exactos de 30 minutos en un rango [start_time, end_time) (1 día o rango de días, con corte de descanso opcional)
+    // Modo 2: Generar bloques exactos de 30 minutos en un rango [start_time, end_time)
     if (dto.start_time && dto.end_time) {
       const targetDates = this.resolveTargetDates(dto.date, dto.end_date);
 
@@ -114,9 +134,7 @@ export class AppointmentsService {
         status: SlotStatus;
         deposit_amount: number;
       }> = [];
-
-      let globalRangeStart: Date | null = null;
-      let globalRangeEnd: Date | null = null;
+      const generatedStartTimes: Date[] = [];
 
       for (const currentDate of targetDates) {
         const rangeStart = this.parseDateTime(dto.start_time, currentDate);
@@ -161,13 +179,6 @@ export class AppointmentsService {
           breakEndMs = breakEnd.getTime();
         }
 
-        if (!globalRangeStart || rangeStart < globalRangeStart) {
-          globalRangeStart = rangeStart;
-        }
-        if (!globalRangeEnd || rangeEnd > globalRangeEnd) {
-          globalRangeEnd = rangeEnd;
-        }
-
         for (
           let cursor = rangeStart.getTime();
           cursor < rangeEnd.getTime();
@@ -182,9 +193,11 @@ export class AppointmentsService {
             continue;
           }
 
+          const slotStart = new Date(cursor);
+          generatedStartTimes.push(slotStart);
           slotsToCreate.push({
             barber_id: barber.id,
-            start_time: new Date(cursor),
+            start_time: slotStart,
             end_time: new Date(cursor + SLOT_DURATION_MS),
             status: SlotStatus.AVAILABLE,
             deposit_amount: PLATFORM_DEPOSIT_ARS,
@@ -192,18 +205,37 @@ export class AppointmentsService {
         }
       }
 
+      // Reactivar horarios que hubieran quedado en CANCELLED dentro del rango solicitado
+      const reactivated =
+        generatedStartTimes.length > 0
+          ? await this.prisma.appointmentSlot.updateMany({
+              where: {
+                barber_id: barber.id,
+                status: SlotStatus.CANCELLED,
+                start_time: { in: generatedStartTimes },
+              },
+              data: {
+                status: SlotStatus.AVAILABLE,
+                client_id: null,
+                locked_until: null,
+                mp_payment_id: null,
+                mp_preference_id: null,
+                deposit_amount: PLATFORM_DEPOSIT_ARS,
+              },
+            })
+          : { count: 0 };
+
       const created = await this.prisma.appointmentSlot.createMany({
         data: slotsToCreate,
         skipDuplicates: true,
       });
 
       const slotsInRange =
-        globalRangeStart && globalRangeEnd
+        generatedStartTimes.length > 0
           ? await this.prisma.appointmentSlot.findMany({
               where: {
                 barber_id: barber.id,
-                start_time: { gte: globalRangeStart },
-                end_time: { lte: globalRangeEnd },
+                start_time: { in: generatedStartTimes },
               },
               orderBy: { start_time: 'asc' },
             })
@@ -212,7 +244,7 @@ export class AppointmentsService {
       return {
         action: 'RANGE_GENERATED',
         days_processed: targetDates.length,
-        generated_count: created.count,
+        generated_count: created.count + reactivated.count,
         total_blocks_in_range: slotsInRange.length,
         slots: slotsInRange,
       };
@@ -378,7 +410,7 @@ export class AppointmentsService {
       throw new NotFoundException('El turno indicado no existe');
     }
 
-    const isOwnerClient = slot.client_id === user.sub;
+    const isOwnerClient = Boolean(slot.client_id && slot.client_id === user.sub);
     const isOwnerBarber = slot.barber.user_id === user.sub;
     const isSuperAdmin = user.role === Role.SUPERADMIN;
 
@@ -387,6 +419,29 @@ export class AppointmentsService {
         'No tenés permisos para cancelar este turno',
       );
     }
+
+    if (slot.status === SlotStatus.AVAILABLE) {
+      throw new BadRequestException(
+        'No se puede cancelar un turno que se encuentra libre y sin reserva activa',
+      );
+    }
+
+    if (slot.status === SlotStatus.CANCELLED) {
+      return {
+        cancelled: true,
+        slot_id: slot.id,
+        status: slot.status,
+        refund_executed: false,
+        deposit_retained: Boolean(slot.mp_payment_id),
+        deposit_amount_retained_ars: slot.mp_payment_id
+          ? slot.deposit_amount
+          : 0,
+        policy: NON_REFUNDABLE_DEPOSIT_POLICY,
+      };
+    }
+
+    const hadPaidDeposit =
+      slot.status === SlotStatus.CONFIRMED || Boolean(slot.mp_payment_id);
 
     const updatedSlot = await this.prisma.$transaction(async (tx) => {
       await tx.reminderQueue.updateMany({
@@ -409,7 +464,7 @@ export class AppointmentsService {
     });
 
     this.logger.log(
-      `🚫 Turno ${slot.id} cancelado por usuario ${user.dni}. Seña de $${slot.deposit_amount} ARS retenida (NO REEMBOLSABLE - Sin llamada a refund de Mercado Pago).`,
+      `🚫 Turno ${slot.id} cancelado por usuario ${user.dni}. Seña retenida: ${hadPaidDeposit ? `$${slot.deposit_amount} ARS` : '$0 ARS'} (NO REEMBOLSABLE - Sin llamada a refund de Mercado Pago).`,
     );
 
     return {
@@ -417,16 +472,58 @@ export class AppointmentsService {
       slot_id: updatedSlot.id,
       status: updatedSlot.status,
       refund_executed: false,
-      deposit_retained: true,
-      deposit_amount_retained_ars: updatedSlot.deposit_amount,
+      deposit_retained: hadPaidDeposit,
+      deposit_amount_retained_ars: hadPaidDeposit
+        ? updatedSlot.deposit_amount
+        : 0,
       policy: NON_REFUNDABLE_DEPOSIT_POLICY,
     };
   }
 
   /**
-   * Libera inmediatamente un turno en PENDING_PAYMENT de vuelta a AVAILABLE (ej. pago rechazado o cancelado).
+   * Libera un turno en PENDING_PAYMENT de vuelta a AVAILABLE (ej. pago rechazado o cancelado).
+   * Valida que el turno esté en PENDING_PAYMENT y, si se provee clientDni o preferenceId, que coincida con el titular del bloqueo.
    */
-  async releaseSingleLock(slotId: string) {
+  async releaseSingleLock(
+    slotId: string,
+    clientDni?: string,
+    preferenceId?: string,
+  ) {
+    const slot = await this.prisma.appointmentSlot.findUnique({
+      where: { id: slotId },
+      include: { client: true },
+    });
+
+    if (!slot || slot.status !== SlotStatus.PENDING_PAYMENT) {
+      return {
+        released: false,
+        slot_id: slotId,
+      };
+    }
+
+    const now = new Date();
+    const isExpired = Boolean(slot.locked_until && slot.locked_until <= now);
+
+    if (!isExpired) {
+      if (clientDni) {
+        const cleanDni = clientDni.replace(/\D/g, '');
+        if (slot.client?.dni && slot.client.dni !== cleanDni) {
+          throw new ForbiddenException(
+            'No tenés permisos para liberar el bloqueo de otro cliente',
+          );
+        }
+      }
+      if (
+        preferenceId &&
+        slot.mp_preference_id &&
+        slot.mp_preference_id !== preferenceId
+      ) {
+        throw new ForbiddenException(
+          'La preferencia indicada no coincide con el bloqueo activo',
+        );
+      }
+    }
+
     const result = await this.prisma.appointmentSlot.updateMany({
       where: {
         id: slotId,
@@ -448,6 +545,7 @@ export class AppointmentsService {
 
   /**
    * Devuelve los turnos disponibles (`AVAILABLE`) de ese barbero agrupados por fecha (YYYY-MM-DD).
+   * Compara el horario nominal del turno contra la hora actual de Argentina (UTC-3).
    */
   async getPublicAvailableSlotsBySlug(slug: string) {
     await this.releaseExpiredLocks();
@@ -467,11 +565,13 @@ export class AppointmentsService {
       );
     }
 
+    const nowArgentinaNominal = new Date(Date.now() - ARGENTINA_UTC_OFFSET_MS);
+
     const availableSlots = await this.prisma.appointmentSlot.findMany({
       where: {
         barber_id: barber.id,
         status: SlotStatus.AVAILABLE,
-        start_time: { gte: new Date() },
+        start_time: { gte: nowArgentinaNominal },
       },
       orderBy: { start_time: 'asc' },
       select: {
@@ -508,8 +608,9 @@ export class AppointmentsService {
   }
 
   /**
-   * Bloquea atómicamente un turno por 10 minutos (`PENDING_PAYMENT`) para el cliente logueado con DNI
-   * (o que se loguea/registra en el acto) y genera la preferencia de Mercado Pago por $2.000 ARS.
+   * Bloquea atómicamente un turno por 10 minutos (`PENDING_PAYMENT`) para el cliente
+   * y genera la preferencia de Mercado Pago por $2.000 ARS.
+   * Si falla la creación de la preferencia en Mercado Pago, revierte el bloqueo inmediatamente a AVAILABLE.
    */
   async lockSlot(
     slotId: string,
@@ -554,6 +655,10 @@ export class AppointmentsService {
               status: SlotStatus.PENDING_PAYMENT,
               locked_until: { lt: now },
             },
+            {
+              status: SlotStatus.PENDING_PAYMENT,
+              client_id: resolvedAuth.user.id,
+            },
           ],
         },
         data: {
@@ -576,39 +681,62 @@ export class AppointmentsService {
       });
     });
 
-    // Generar preferencia de Mercado Pago ($2.000 ARS a cuenta central de plataforma) con slotId en external_reference
-    const preference = await this.paymentsService.createDepositPreference({
-      slotId: lockedSlot.id,
-      shopName: lockedSlot.barber.shop_name,
-      startTime: lockedSlot.start_time,
-      clientDni: resolvedAuth.user.dni,
-    });
+    try {
+      // Generar preferencia de Mercado Pago ($2.000 ARS a cuenta central de plataforma) con slotId en external_reference
+      const preference = await this.paymentsService.createDepositPreference({
+        slotId: lockedSlot.id,
+        shopName: lockedSlot.barber.shop_name,
+        barberSlug: lockedSlot.barber.slug,
+        startTime: lockedSlot.start_time,
+        clientDni: resolvedAuth.user.dni,
+        clientName: resolvedAuth.user.name,
+      });
 
-    const updatedSlot = await this.prisma.appointmentSlot.update({
-      where: { id: lockedSlot.id },
-      data: {
-        mp_preference_id: preference.preference_id,
-      },
-    });
+      const updatedSlot = await this.prisma.appointmentSlot.update({
+        where: { id: lockedSlot.id },
+        data: {
+          mp_preference_id: preference.preference_id,
+        },
+      });
 
-    return {
-      slot: {
-        id: updatedSlot.id,
-        barber_id: updatedSlot.barber_id,
-        client_id: updatedSlot.client_id,
-        start_time: updatedSlot.start_time,
-        end_time: updatedSlot.end_time,
-        status: updatedSlot.status,
-        locked_until: updatedSlot.locked_until,
-        deposit_amount: updatedSlot.deposit_amount,
-        mp_preference_id: updatedSlot.mp_preference_id,
-      },
-      payment: preference,
-      ...(resolvedAuth.access_token && {
-        access_token: resolvedAuth.access_token,
-        user: resolvedAuth.user,
-      }),
-    };
+      return {
+        slot: {
+          id: updatedSlot.id,
+          barber_id: updatedSlot.barber_id,
+          client_id: updatedSlot.client_id,
+          start_time: updatedSlot.start_time,
+          end_time: updatedSlot.end_time,
+          status: updatedSlot.status,
+          locked_until: updatedSlot.locked_until,
+          deposit_amount: updatedSlot.deposit_amount,
+          mp_preference_id: updatedSlot.mp_preference_id,
+        },
+        payment: preference,
+        ...(resolvedAuth.access_token && {
+          access_token: resolvedAuth.access_token,
+          user: resolvedAuth.user,
+        }),
+      };
+    } catch (err) {
+      // Rollback inmediato del bloqueo si falla la creación de preferencia en Mercado Pago
+      await this.prisma.appointmentSlot
+        .updateMany({
+          where: {
+            id: lockedSlot.id,
+            status: SlotStatus.PENDING_PAYMENT,
+            client_id: resolvedAuth.user.id,
+          },
+          data: {
+            status: SlotStatus.AVAILABLE,
+            client_id: null,
+            locked_until: null,
+            mp_preference_id: null,
+          },
+        })
+        .catch(() => undefined);
+
+      throw err;
+    }
   }
 
   /**
@@ -666,12 +794,13 @@ export class AppointmentsService {
 
     if (!dto?.dni || !dto?.password) {
       throw new UnauthorizedException(
-        'Debés iniciar sesión con tu DNI y contraseña para señar el turno',
+        'Debés indicar tu DNI para reservar el turno',
       );
     }
 
+    const cleanDni = dto.dni.replace(/\D/g, '');
     let user = await this.prisma.user.findUnique({
-      where: { dni: dto.dni },
+      where: { dni: cleanDni },
     });
 
     if (user) {
@@ -679,7 +808,7 @@ export class AppointmentsService {
       if (!isPasswordValid) {
         throw new UnauthorizedException('DNI o contraseña incorrectos');
       }
-      if (dto.email && !user.email) {
+      if (dto.email && !user.email && user.role === Role.CLIENT) {
         user = await this.prisma.user.update({
           where: { id: user.id },
           data: { email: dto.email },
@@ -689,9 +818,9 @@ export class AppointmentsService {
       const hashedPassword = await bcrypt.hash(dto.password, 10);
       user = await this.prisma.user.create({
         data: {
-          dni: dto.dni,
+          dni: cleanDni,
           password: hashedPassword,
-          name: dto.name || `Cliente ${dto.dni}`,
+          name: dto.name || `Cliente ${cleanDni}`,
           phone: dto.phone || '',
           email: dto.email || null,
           role: Role.CLIENT,

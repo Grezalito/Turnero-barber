@@ -25,6 +25,7 @@ import { api, getSlugFromAuthContext } from '../services/api';
 import { AppointmentSlot, WeeklyGoalMetrics } from '../types/api';
 import {
   calculateWeeklyGoalMetrics,
+  getArgentinaDateIso,
   getWeekBoundsUtc,
 } from '../utils/postBookingAndGamification';
 import { formatDateHeader, formatTime30m } from './PublicBookingView';
@@ -118,11 +119,8 @@ export const BarberDashboardView: React.FC<BarberDashboardViewProps> = ({
   onSwitchToPublicView,
   onLogout,
 }) => {
-  const todayIsoDate = useMemo(() => new Date().toISOString().slice(0, 10), []);
-  const tomorrowIsoDate = useMemo(() => {
-    const d = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    return d.toISOString().slice(0, 10);
-  }, []);
+  const todayIsoDate = useMemo(() => getArgentinaDateIso(0), []);
+  const tomorrowIsoDate = useMemo(() => getArgentinaDateIso(1), []);
 
   const [viewMode, setViewMode] = useState<QuickViewFilter>('HOY');
   const [selectedWeekDay, setSelectedWeekDay] = useState<string>(todayIsoDate);
@@ -208,8 +206,7 @@ export const BarberDashboardView: React.FC<BarberDashboardViewProps> = ({
   const weekDaysList = useMemo(() => {
     const list: string[] = [];
     for (let i = 0; i < 7; i++) {
-      const d = new Date(Date.now() + i * 24 * 60 * 60 * 1000);
-      list.push(d.toISOString().slice(0, 10));
+      list.push(getArgentinaDateIso(i));
     }
     return list;
   }, []);
@@ -477,9 +474,9 @@ export const BarberDashboardView: React.FC<BarberDashboardViewProps> = ({
               onClick={onLogout}
               title="Cerrar Sesión"
               aria-label="Cerrar Sesión"
-              className="min-h-[44px] px-3 rounded-lg bg-[#0A0A0B] border border-[#C85A32] hover:bg-[#C85A32]/15 text-[#F2EFE9] text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+              className="min-h-[44px] px-3 rounded-lg bg-[#090D16] border border-[#1E293B] hover:border-[#334155] text-[#94A3B8] hover:text-[#F8FAFC] text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
             >
-              <LogOut className="w-4 h-4 text-[#C85A32]" />
+              <LogOut className="w-4 h-4 text-[#3B82F6]" />
               <span className="hidden sm:inline">Cerrar Sesión</span>
             </button>
           )}
