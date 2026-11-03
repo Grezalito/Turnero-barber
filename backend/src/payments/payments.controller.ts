@@ -1,17 +1,19 @@
 import {
   Body,
   Controller,
-  Headers,
   HttpCode,
   HttpStatus,
   Logger,
+  NotFoundException,
   Post,
   Query,
+  UseGuards,
 } from '@nestjs/common';
 import { Public } from '../auth/decorators/public.decorator';
 import { sanitizeControlChars } from '../security/pii-sanitizer.util';
 import { ConfirmReturnDto } from './dto/confirm-return.dto';
 import { CreatePreferenceDto } from './dto/create-preference.dto';
+import { MercadoPagoWebhookGuard } from './guards/mercadopago-webhook.guard';
 import { PaymentsService } from './payments.service';
 
 @Controller('payments')
@@ -35,39 +37,60 @@ export class PaymentsController {
   }
 
   @Public()
+  @UseGuards(MercadoPagoWebhookGuard)
   @Post('webhook')
   @HttpCode(HttpStatus.OK)
   async handleWebhook(
     @Body() body: Record<string, any>,
     @Query() query: Record<string, any>,
-    @Headers('x-signature') xSignature?: string,
-    @Headers('x-request-id') xRequestId?: string,
   ) {
-    const rawPaymentId =
-      body?.data?.id ||
-      query?.['data.id'] ||
-      body?.id ||
-      query?.id ||
-      body?.payment_id;
+    const rawType = String(query?.type || body?.type || '');
+    const rawTopic = String(query?.topic || body?.topic || '');
+    const rawAction = String(body?.action || query?.action || '');
+
+    const isPayment =
+      rawType === 'payment' ||
+      rawTopic === 'payment' ||
+      rawAction.startsWith('payment.');
+
+    if (!isPayment) {
+      this.logger.log(
+        `Webhook MP ignorado (evento no payment): type=${rawType || rawTopic || rawAction}`,
+      );
+      return { received: true, ignored: true };
+    }
+
+    const rawPaymentId = query?.['data.id'] ?? body?.data?.id;
     const paymentId =
       rawPaymentId !== undefined && rawPaymentId !== null
         ? sanitizeControlChars(String(rawPaymentId))
-        : undefined;
-    const eventType = sanitizeControlChars(
-      String(
-        body?.type || query?.type || body?.action || query?.topic || 'unknown',
-      ),
-    );
+        : '';
 
-    this.logger.log(`Webhook MP recibido: type=${eventType}, id=${paymentId}`);
+    this.logger.log(`Webhook MP recibido para procesar: id=${paymentId}`);
 
-    if (!paymentId || paymentId === '123456') {
-      return { received: true, simulated: true };
+    // Responder 200 { received: true } INMEDIATAMENTE y procesar en segundo plano
+    setImmediate(async () => {
+      try {
+        await this.paymentsService.processPaymentNotification(paymentId);
+      } catch (error) {
+        this.logger.error(
+          `Error procesando webhook en segundo plano para paymentId=${paymentId}: ${(error as Error).message}`,
+          (error as Error).stack,
+        );
+      }
+    });
+
+    return { received: true };
+  }
+
+  @Public()
+  @Post('simulate-webhook')
+  @HttpCode(HttpStatus.OK)
+  async simulateWebhook(@Body() body: Record<string, any>) {
+    if (this.paymentsService.isProductionEnv()) {
+      throw new NotFoundException('Simulación no disponible en producción');
     }
 
-    return this.paymentsService.handleWebhook(body, query, {
-      xSignature,
-      xRequestId,
-    });
+    return this.paymentsService.simulateWebhook(body);
   }
 }

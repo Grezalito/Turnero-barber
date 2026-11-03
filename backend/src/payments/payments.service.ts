@@ -23,6 +23,7 @@ import {
 } from '../security/pii-sanitizer.util';
 import { ConfirmReturnDto } from './dto/confirm-return.dto';
 import { CreatePreferenceDto } from './dto/create-preference.dto';
+import { MercadoPagoService } from './mercadopago.service';
 
 export const PLATFORM_DEPOSIT_ARS = 2000;
 export const SLOT_DURATION_MS = 30 * 60 * 1000;
@@ -49,9 +50,18 @@ export class PaymentsService {
     private readonly mailService: MailService,
     @Inject(REMINDER_PROVIDER)
     private readonly reminderProvider: IReminderProvider,
+    private readonly mercadoPagoService: MercadoPagoService,
   ) {}
 
-  private isProductionEnv(): boolean {
+  isPaymentNotification(
+    type?: string | null,
+    action?: string | null,
+    topic?: string | null,
+  ): boolean {
+    return this.mercadoPagoService.isPaymentNotification(type, action, topic);
+  }
+
+  isProductionEnv(): boolean {
     return (
       (this.configService.get<string>('NODE_ENV') || '').toLowerCase() ===
       'production'
@@ -300,18 +310,10 @@ export class PaymentsService {
       );
     }
 
-    let response: Response;
+    let preference;
     try {
-      response = await fetch(
-        'https://api.mercadopago.com/checkout/preferences',
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${mpAccessToken}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(preferencePayload),
-        },
+      preference = await this.mercadoPagoService.createPreference(
+        preferencePayload as any,
       );
     } catch (err) {
       this.logger.error(
@@ -322,26 +324,18 @@ export class PaymentsService {
       );
     }
 
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => '');
-      this.logger.error(
-        `Mercado Pago rechazó la creación de preferencia (${response.status}): ${errorText}`,
-      );
+    if (!preference || !preference.id || !preference.init_point) {
+      this.logger.error('Mercado Pago no retornó init_point válido');
       throw new BadGatewayException(
         'Mercado Pago no pudo generar el link de pago en este momento.',
       );
     }
 
-    const data = (await response.json()) as {
-      id: string;
-      init_point: string;
-      sandbox_init_point?: string;
-    };
-
     return {
-      preference_id: data.id,
-      init_point: data.init_point,
-      sandbox_init_point: data.sandbox_init_point || data.init_point,
+      preference_id: preference.id,
+      init_point: preference.init_point,
+      sandbox_init_point:
+        preference.sandbox_init_point || preference.init_point,
       deposit_amount: PLATFORM_DEPOSIT_ARS,
       external_reference: params.slotId,
       is_sandbox_local: false,
@@ -475,94 +469,82 @@ export class PaymentsService {
    * Procesa el Webhook de Mercado Pago verificando estado `approved` e idempotencia con `mp_payment_id` (@unique).
    * Pasa el turno a CONFIRMED y encola el recordatorio en ReminderQueue si reminder_addon_active == true.
    */
+  /**
+   * Procesa la notificación de pago en segundo plano de manera segura (verify-then-fetch)
+   * e idempotente (Prisma transaction con actualización condicional y P2002 handling).
+   */
+  async processPaymentNotification(paymentId: string) {
+    return this.executePaymentConfirmation({ paymentId });
+  }
+
+  /**
+   * Endpoint de simulación síncrono para entornos fuera de producción.
+   */
+  async simulateWebhook(body: Record<string, any>) {
+    if (this.isProductionEnv()) {
+      throw new NotFoundException('Simulación no disponible en producción');
+    }
+
+    const rawPaymentId =
+      body?.payment_id || body?.data?.id || body?.id || `mp_sim_${Date.now()}`;
+    const paymentId = sanitizeControlChars(String(rawPaymentId));
+
+    return this.executePaymentConfirmation({
+      paymentId,
+      simulatedPayload: body,
+    });
+  }
+
+  /**
+   * Wrapper para compatibilidad hacia atrás con llamadas internas a handleWebhook.
+   */
   async handleWebhook(
     body: Record<string, any> = {},
     query: Record<string, any> = {},
-    signatureHeaders?: { xSignature?: string; xRequestId?: string },
+    _signatureHeaders?: { xSignature?: string; xRequestId?: string },
   ) {
     const rawPaymentId =
-      body?.data?.id ||
-      query?.['data.id'] ||
-      body?.id ||
-      query?.id ||
+      query?.['data.id'] ??
+      query?.id ??
+      body?.data?.id ??
+      body?.id ??
       body?.payment_id;
     const paymentId =
       rawPaymentId !== undefined && rawPaymentId !== null
         ? sanitizeControlChars(String(rawPaymentId))
-        : undefined;
-    const eventType = sanitizeControlChars(
-      String(
-        body?.type || query?.type || body?.action || query?.topic || 'unknown',
-      ),
-    );
+        : '';
 
-    this.logger.log(`Webhook MP recibido: type=${eventType}, id=${paymentId}`);
-
-    if (!paymentId || paymentId === '123456') {
-      return { received: true, simulated: true };
+    if (!paymentId) {
+      return { received: true, processed: false, error: 'Missing paymentId' };
     }
 
-    // Verificación criptográfica HMAC-SHA256 de firma de Webhook si MP_WEBHOOK_SECRET está configurado (ISO 27001 A.8.24 / SOC 2 CC6.6)
-    const webhookSecret = (
-      this.configService.get<string>('MP_WEBHOOK_SECRET') || ''
-    ).trim();
-    if (webhookSecret && signatureHeaders?.xSignature) {
-      const isValidSig = this.verifyMercadoPagoWebhookSignature(
-        paymentId,
-        signatureHeaders.xSignature,
-        signatureHeaders.xRequestId,
-        webhookSecret,
-      );
-      if (!isValidSig) {
-        this.logger.warn(
-          `[SECURITY_AUDIT] event=WEBHOOK_SIGNATURE_INVALID paymentId=${paymentId}`,
-        );
-        return {
-          received: true,
-          processed: false,
-          error: 'Invalid webhook signature',
-        };
-      }
-    }
+    return this.executePaymentConfirmation({
+      paymentId,
+      simulatedPayload: body,
+    });
+  }
 
+  /**
+   * Lógica transaccional unificada de confirmación de pago e idempotencia en PostgreSQL/Prisma.
+   */
+  private async executePaymentConfirmation(params: {
+    paymentId: string;
+    simulatedPayload?: Record<string, any>;
+  }) {
+    const { paymentId, simulatedPayload } = params;
     const mpPaymentId = paymentId;
 
-    const alreadyProcessedSlot = await this.prisma.appointmentSlot.findUnique({
-      where: { mp_payment_id: mpPaymentId },
-      include: {
-        barber: { include: { user: true } },
-        reminders: { orderBy: { created_at: 'desc' }, take: 1 },
-      },
-    });
-
-    if (alreadyProcessedSlot) {
-      this.logger.log(
-        `[Idempotencia] Pago mp_payment_id=${mpPaymentId} ya fue procesado para el slot ${alreadyProcessedSlot.id}`,
-      );
-      const latestRem = alreadyProcessedSlot.reminders?.[0];
-      return {
-        received: true,
-        processed: true,
-        idempotent: true,
-        status: alreadyProcessedSlot.status,
-        slot_id: alreadyProcessedSlot.id,
-        mp_payment_id: mpPaymentId,
-        deposit_amount: alreadyProcessedSlot.deposit_amount,
-        start_time: alreadyProcessedSlot.start_time.toISOString(),
-        end_time: alreadyProcessedSlot.end_time.toISOString(),
-        barber_phone: alreadyProcessedSlot.barber?.user?.phone,
-        shop_name: alreadyProcessedSlot.barber?.shop_name,
-        barber_slug: alreadyProcessedSlot.barber?.slug,
-        reminder_enqueued: Boolean(latestRem),
-        reminder_id: latestRem?.id || null,
-        reminder_message: latestRem?.generated_message || null,
-      };
-    }
-
-    const paymentDetails = await this.resolvePaymentDetails(mpPaymentId, body);
+    const paymentDetails = await this.resolvePaymentDetails(
+      mpPaymentId,
+      simulatedPayload,
+    );
 
     if (!paymentDetails) {
-      return { received: true, processed: false, error: 'Payment not found or unverified' };
+      return {
+        received: true,
+        processed: false,
+        error: 'Payment not found or unverified',
+      };
     }
 
     if (paymentDetails.status !== 'approved') {
@@ -583,94 +565,136 @@ export class PaymentsService {
       this.logger.warn(
         `El pago ${mpPaymentId} está aprobado pero no posee external_reference (slotId). Ignorando.`,
       );
-      return { received: true, processed: false, error: 'Missing external_reference' };
+      return {
+        received: true,
+        processed: false,
+        error: 'Missing external_reference',
+      };
     }
 
-    let transitionResult: {
-      slot: any;
-      alreadyConfirmed: boolean;
-    } | null = null;
+    const slotId = paymentDetails.externalReference;
+
+    type TxResult =
+      | { kind: 'ALREADY_PROCESSED'; slot: any }
+      | { kind: 'NOT_FOUND' }
+      | { kind: 'ALREADY_CONFIRMED'; slot: any }
+      | { kind: 'TRANSITIONED'; slot: any };
+
+    let txResult: TxResult;
 
     try {
-      transitionResult = await this.prisma.$transaction(async (tx) => {
-        const slot = await tx.appointmentSlot.findUnique({
-          where: { id: paymentDetails.externalReference },
+      txResult = await this.prisma.$transaction(async (tx) => {
+        // 1. Verificar si algún slot ya fue confirmado con este mp_payment_id
+        const existingByPayment = await tx.appointmentSlot.findUnique({
+          where: { mp_payment_id: mpPaymentId },
           include: {
-            barber: {
-              include: { user: true },
-            },
+            barber: { include: { user: true } },
             client: true,
             reminders: { orderBy: { created_at: 'desc' }, take: 1 },
           },
         });
 
-        if (!slot) {
-          return null;
+        if (existingByPayment) {
+          return { kind: 'ALREADY_PROCESSED', slot: existingByPayment };
         }
 
-        if (slot.status === SlotStatus.CONFIRMED) {
-          return { slot, alreadyConfirmed: true };
+        // 2. Verificar que el slot por external_reference exista y no esté ya CONFIRMED
+        const currentSlot = await tx.appointmentSlot.findUnique({
+          where: { id: slotId },
+          include: {
+            barber: { include: { user: true } },
+            client: true,
+            reminders: { orderBy: { created_at: 'desc' }, take: 1 },
+          },
+        });
+
+        if (!currentSlot) {
+          return { kind: 'NOT_FOUND' };
         }
 
-        const updated = await tx.appointmentSlot.update({
-          where: { id: slot.id },
+        if (currentSlot.status === SlotStatus.CONFIRMED) {
+          return { kind: 'ALREADY_CONFIRMED', slot: currentSlot };
+        }
+
+        // 3. Update condicional atómico para prevenir carreras concurrentes
+        const updateRes = await tx.appointmentSlot.updateMany({
+          where: {
+            id: currentSlot.id,
+            status: { not: SlotStatus.CONFIRMED },
+          },
           data: {
             status: SlotStatus.CONFIRMED,
             mp_payment_id: mpPaymentId,
             locked_until: null,
             deposit_amount: PLATFORM_DEPOSIT_ARS,
           },
-          include: {
-            barber: {
-              include: { user: true },
+        });
+
+        if (updateRes.count === 0) {
+          const reloaded = await tx.appointmentSlot.findUnique({
+            where: { id: currentSlot.id },
+            include: {
+              barber: { include: { user: true } },
+              client: true,
+              reminders: { orderBy: { created_at: 'desc' }, take: 1 },
             },
+          });
+          return { kind: 'ALREADY_CONFIRMED', slot: reloaded || currentSlot };
+        }
+
+        const updated = await tx.appointmentSlot.findUnique({
+          where: { id: currentSlot.id },
+          include: {
+            barber: { include: { user: true } },
             client: true,
             reminders: { orderBy: { created_at: 'desc' }, take: 1 },
           },
         });
 
-        return { slot: updated, alreadyConfirmed: false };
+        return { kind: 'TRANSITIONED', slot: updated! };
       });
     } catch (err) {
-      // Manejo de concurrencia estricta (P2002 en mp_payment_id único)
       if (
         err instanceof Prisma.PrismaClientKnownRequestError &&
         err.code === 'P2002'
       ) {
+        // Colisión unique sobre mp_payment_id: concurrencia idempotente
         const existing = await this.prisma.appointmentSlot.findUnique({
           where: { mp_payment_id: mpPaymentId },
-          include: { barber: { include: { user: true } } },
+          include: {
+            barber: { include: { user: true } },
+            client: true,
+            reminders: { orderBy: { created_at: 'desc' }, take: 1 },
+          },
         });
         if (existing) {
-          return {
-            received: true,
-            processed: true,
-            idempotent: true,
-            slot_id: existing.id,
-            status: existing.status,
-            mp_payment_id: mpPaymentId,
-            start_time: existing.start_time.toISOString(),
-            end_time: existing.end_time.toISOString(),
-            barber_phone: existing.barber?.user?.phone,
-            shop_name: existing.barber?.shop_name,
-          };
+          txResult = { kind: 'ALREADY_PROCESSED', slot: existing };
+        } else {
+          throw err;
         }
+      } else {
+        throw err;
       }
-      throw err;
     }
 
-    if (!transitionResult || !transitionResult.slot) {
+    if (txResult.kind === 'NOT_FOUND') {
       this.logger.warn(
-        `No existe el turno (slot) con id ${paymentDetails.externalReference} para el pago ${mpPaymentId}`,
+        `No existe el turno con id ${slotId} para el pago ${mpPaymentId}`,
       );
       return { received: true, processed: false, error: 'Slot not found' };
     }
 
-    const { slot: confirmedSlot, alreadyConfirmed } = transitionResult;
+    const confirmedSlot = txResult.slot;
 
-    // Si ya había sido confirmado previamente por otro proceso concurrente, devolver idempotentemente sin duplicar emails ni recordatorios
-    if (alreadyConfirmed) {
-      const existingReminder = confirmedSlot.reminders?.[0];
+    // Si ya fue procesado o confirmado previamente, devolver idempotentemente sin re-ejecutar efectos secundarios
+    if (
+      txResult.kind === 'ALREADY_PROCESSED' ||
+      txResult.kind === 'ALREADY_CONFIRMED'
+    ) {
+      this.logger.log(
+        `[Idempotencia] Pago ${mpPaymentId} ya fue procesado o slot ${confirmedSlot.id} ya confirmado.`,
+      );
+      const latestRem = confirmedSlot.reminders?.[0];
       return {
         received: true,
         processed: true,
@@ -681,15 +705,16 @@ export class PaymentsService {
         deposit_amount: confirmedSlot.deposit_amount,
         start_time: confirmedSlot.start_time.toISOString(),
         end_time: confirmedSlot.end_time.toISOString(),
-        barber_phone: confirmedSlot.barber.user.phone,
-        shop_name: confirmedSlot.barber.shop_name,
-        barber_slug: confirmedSlot.barber.slug,
-        reminder_enqueued: Boolean(existingReminder),
-        reminder_id: existingReminder?.id || null,
-        reminder_message: existingReminder?.generated_message || null,
+        barber_phone: confirmedSlot.barber?.user?.phone,
+        shop_name: confirmedSlot.barber?.shop_name,
+        barber_slug: confirmedSlot.barber?.slug,
+        reminder_enqueued: Boolean(latestRem),
+        reminder_id: latestRem?.id || null,
+        reminder_message: latestRem?.generated_message || null,
       };
     }
 
+    // Efectos secundarios solo si ESTA ejecución realizó la transición
     let reminderRecord: {
       id: string;
       generated_message: string | null;
@@ -749,14 +774,14 @@ export class PaymentsService {
   }
 
   /**
-   * Verifica la autenticidad del pago contra la API de Mercado Pago.
+   * Verifica la autenticidad del pago contra la API de Mercado Pago (verify-then-fetch).
    * En producción (NODE_ENV=production) exige estrictamente consultar https://api.mercadopago.com/v1/payments/:id
    * con MP_ACCESS_TOKEN y nunca confía en el body plano del request.
    * En entornos de desarrollo/sandbox local permite simular webhooks cuando no hay token productivo o el ID es de prueba.
    */
   private async resolvePaymentDetails(
     mpPaymentId: string,
-    body: Record<string, any>,
+    simulatedPayload?: Record<string, any>,
   ): Promise<{
     status: string;
     externalReference: string | undefined;
@@ -773,11 +798,16 @@ export class PaymentsService {
     const isSimulatedId =
       mpPaymentId.startsWith('mp_pay_') || mpPaymentId.startsWith('mp_sim_');
 
-    // Solo fuera de producción se permite simulación local de payloads directos
-    if (!isProd && body?.external_reference && body?.status && (isPlaceholderToken || isSimulatedId)) {
+    // Solo fuera de producción se permite simulación local de payloads directos (vía simulateWebhook)
+    if (
+      !isProd &&
+      simulatedPayload?.external_reference &&
+      simulatedPayload?.status &&
+      (isPlaceholderToken || isSimulatedId)
+    ) {
       return {
-        status: String(body.status),
-        externalReference: String(body.external_reference),
+        status: String(simulatedPayload.status),
+        externalReference: String(simulatedPayload.external_reference),
       };
     }
 
@@ -789,24 +819,9 @@ export class PaymentsService {
     }
 
     try {
-      const response = await fetch(
-        `https://api.mercadopago.com/v1/payments/${encodeURIComponent(mpPaymentId)}`,
-        {
-          headers: {
-            Authorization: `Bearer ${mpAccessToken}`,
-          },
-        },
-      );
-
-      if (!response.ok) {
-        const errorBody = await response.text().catch(() => '');
-        this.logger.warn(
-          `Consulta de pago MP ${mpPaymentId} devolvió status ${response.status}: ${errorBody}`,
-        );
-        return null;
-      }
-
-      const paymentData = (await response.json()) as {
+      const paymentData = (await this.mercadoPagoService.getPayment(
+        mpPaymentId,
+      )) as {
         status?: string;
         external_reference?: string;
         transaction_amount?: number;
@@ -830,54 +845,16 @@ export class PaymentsService {
       }
 
       return {
-        status: paymentData.status,
-        externalReference: paymentData.external_reference,
+        status: String(paymentData.status),
+        externalReference: paymentData.external_reference
+          ? String(paymentData.external_reference)
+          : undefined,
       };
     } catch (error) {
       this.logger.warn(
         `Error consultando pago ${mpPaymentId} en Mercado Pago: ${(error as Error).message}`,
       );
       return null;
-    }
-  }
-
-  /**
-   * Valida la firma HMAC-SHA256 enviada por Mercado Pago en la cabecera `x-signature` (formato: ts=...,v1=...)
-   * en tiempo constante (`crypto.timingSafeEqual`).
-   */
-  private verifyMercadoPagoWebhookSignature(
-    dataId: string,
-    xSignature: string,
-    xRequestId: string | undefined,
-    secret: string,
-  ): boolean {
-    try {
-      const parts = xSignature.split(',');
-      let ts = '';
-      let v1 = '';
-      for (const part of parts) {
-        const [k, v] = part.split('=').map((s) => s.trim());
-        if (k === 'ts') ts = v || '';
-        if (k === 'v1') v1 = v || '';
-      }
-      if (!ts || !v1) {
-        return false;
-      }
-
-      const manifest = `id:${dataId.toLowerCase()};${xRequestId ? `request-id:${xRequestId};` : ''}ts:${ts};`;
-      const expectedHex = crypto
-        .createHmac('sha256', secret)
-        .update(manifest)
-        .digest('hex');
-
-      const bufA = Buffer.from(v1, 'hex');
-      const bufB = Buffer.from(expectedHex, 'hex');
-      if (bufA.length !== bufB.length || bufA.length === 0) {
-        return false;
-      }
-      return crypto.timingSafeEqual(bufA, bufB);
-    } catch {
-      return false;
     }
   }
 }

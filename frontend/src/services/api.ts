@@ -262,7 +262,7 @@ export const api = {
   ): Promise<WebhookSimulationResponse> {
     const uniqueSuffix = Math.random().toString(36).slice(2, 7).toUpperCase();
     const mockPaymentId = `mp_pay_${Date.now()}_${uniqueSuffix}`;
-    return request<WebhookSimulationResponse>('/payments/webhook', {
+    return request<WebhookSimulationResponse>('/payments/simulate-webhook', {
       method: 'POST',
       skipAuth: true,
       body: JSON.stringify({
