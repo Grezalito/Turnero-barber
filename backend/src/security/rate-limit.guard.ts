@@ -149,11 +149,12 @@ export class RateLimitGuard implements CanActivate {
     };
   }
 
+  /**
+   * IP del cliente según Express (`req.ip`), que respeta `trust proxy` (configurado en main.ts):
+   * solo se confía en la IP agregada por el proxy reverso; los valores de X-Forwarded-For
+   * inyectados por el cliente se ignoran, evitando la evasión del rate limit por spoofing.
+   */
   private resolveClientIp(req: Request): string {
-    const forwarded = req.headers['x-forwarded-for'];
-    if (typeof forwarded === 'string' && forwarded.trim().length > 0) {
-      return forwarded.split(',')[0].trim();
-    }
     return req.ip || req.socket?.remoteAddress || 'unknown';
   }
 

@@ -1,8 +1,9 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { PrismaService } from '../../prisma/prisma.service';
+import { resolveJwtSecret } from '../jwt-secret.util';
 
 export interface JwtPayload {
   sub: string;
@@ -12,6 +13,8 @@ export interface JwtPayload {
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
+  private readonly logger = new Logger(JwtStrategy.name);
+
   constructor(
     configService: ConfigService,
     private readonly prisma: PrismaService,
@@ -20,35 +23,27 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
       algorithms: ['HS256'],
-      secretOrKey:
-        configService.get<string>('JWT_SECRET')?.trim() ||
-        'turnero-barber-super-secret-jwt-key-2026',
+      issuer: 'turnero-barber-api',
+      secretOrKey: resolveJwtSecret(configService.get<string>('JWT_SECRET')),
     });
   }
 
+  /**
+   * El token solo es válido si el usuario existe HOY en la base y conserva el rol con el que se emitió.
+   * Usuarios borrados, tokens apócrifos o roles degradados/escalados → 401.
+   */
   async validate(payload: JwtPayload) {
-    let user = await this.prisma.user.findUnique({
-      where: { id: payload.sub },
-      select: { id: true, dni: true, name: true, phone: true, role: true },
-    });
+    const user = payload?.sub
+      ? await this.prisma.user.findUnique({
+          where: { id: payload.sub },
+          select: { id: true, dni: true, name: true, phone: true, role: true },
+        })
+      : null;
 
-    if (!user && payload.dni) {
-      user = await this.prisma.user.findUnique({
-        where: { dni: payload.dni },
-        select: { id: true, dni: true, name: true, phone: true, role: true },
-      });
-    }
-
-    if (!user) {
-      if (payload.role === 'SUPERADMIN') {
-        return {
-          sub: payload.sub,
-          dni: payload.dni,
-          name: 'SuperAdmin Plataforma',
-          phone: '+5491100000000',
-          role: 'SUPERADMIN',
-        };
-      }
+    if (!user || user.role !== payload.role) {
+      this.logger.warn(
+        `[SECURITY_AUDIT] event=JWT_REJECTED reason=${user ? 'ROLE_MISMATCH' : 'USER_NOT_FOUND'} tokenRole=${payload?.role ?? 'none'}`,
+      );
       throw new UnauthorizedException('Usuario no encontrado o sesión inválida');
     }
 

@@ -70,6 +70,8 @@ export interface LockSlotResponse {
     external_reference: string;
     is_sandbox_local?: boolean;
   };
+  /** Prueba de titularidad del bloqueo: necesaria para liberarlo. */
+  lock_token: string;
   access_token?: string;
   user?: User;
 }

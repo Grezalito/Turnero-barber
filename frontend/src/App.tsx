@@ -576,6 +576,8 @@ const AppContent: React.FC = () => {
           external_reference: slot.id,
           is_sandbox_local: true,
         },
+        // Fallback offline de desarrollo: no hay bloqueo real en el servidor.
+        lock_token: '',
       };
       setActiveLock(fallbackLock);
       setIsSandboxCheckoutOpen(true);

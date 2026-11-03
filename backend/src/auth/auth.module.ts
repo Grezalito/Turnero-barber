@@ -1,12 +1,11 @@
-import { Logger, Module } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { resolveJwtSecret } from './jwt-secret.util';
 import { JwtStrategy } from './strategies/jwt.strategy';
-
-const authModuleLogger = new Logger('AuthModule');
 
 @Module({
   imports: [
@@ -15,20 +14,11 @@ const authModuleLogger = new Logger('AuthModule');
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => {
-        const isProd =
-          (configService.get<string>('NODE_ENV') || '').toLowerCase() ===
-          'production';
-        const configuredSecret = configService.get<string>('JWT_SECRET')?.trim();
-
-        if (isProd && (!configuredSecret || configuredSecret.length < 32)) {
-          authModuleLogger.warn(
-            '[SECURITY_AUDIT] event=WEAK_OR_MISSING_JWT_SECRET_IN_PROD recommendation="Configure un JWT_SECRET de al menos 32 bytes de entropía"',
-          );
-        }
+        // Lanza si falta o es débil: el módulo no inicializa y la app no arranca.
+        const secret = resolveJwtSecret(configService.get<string>('JWT_SECRET'));
 
         return {
-          secret:
-            configuredSecret || 'turnero-barber-super-secret-jwt-key-2026',
+          secret,
           signOptions: {
             algorithm: 'HS256',
             expiresIn: configService.get<string>('JWT_EXPIRES_IN') || '12h',

@@ -15,6 +15,38 @@ export const API_BASE_URL =
   import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
 const TOKEN_STORAGE_KEY = 'turnero_barber_jwt';
+const LOCK_TOKEN_PREFIX = 'turnero_lock_token:';
+
+/**
+ * El lockToken prueba que este navegador es el titular del bloqueo de un turno.
+ * Se guarda por slotId en localStorage para sobrevivir el redirect a Mercado Pago y volver.
+ */
+export function saveLockToken(slotId: string, token?: string | null): void {
+  if (!slotId || !token) return;
+  try {
+    localStorage.setItem(LOCK_TOKEN_PREFIX + slotId, token);
+  } catch {
+    // storage no disponible (modo privado): el bloqueo vencerá solo
+  }
+}
+
+export function getLockToken(slotId?: string | null): string | undefined {
+  if (!slotId) return undefined;
+  try {
+    return localStorage.getItem(LOCK_TOKEN_PREFIX + slotId) || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function clearLockToken(slotId?: string | null): void {
+  if (!slotId) return;
+  try {
+    localStorage.removeItem(LOCK_TOKEN_PREFIX + slotId);
+  } catch {
+    // ignore
+  }
+}
 const USER_STORAGE_KEY = 'turnero_barber_user';
 
 export function getStoredToken(): string | null {
@@ -209,7 +241,7 @@ export const api = {
       phone?: string;
     },
   ): Promise<LockSlotResponse> {
-    return request<LockSlotResponse>(
+    const res = await request<LockSlotResponse>(
       `/appointments/${encodeURIComponent(slotId)}/lock`,
       {
         method: 'POST',
@@ -217,6 +249,8 @@ export const api = {
         body: JSON.stringify(inlineCredentials || {}),
       },
     );
+    saveLockToken(res.slot?.id || slotId, res.lock_token);
+    return res;
   },
 
   async createPaymentPreference(payload: {
@@ -229,17 +263,21 @@ export const api = {
     sandbox_init_point?: string;
     preference_id?: string;
     slot_id?: string;
+    lock_token?: string;
   }> {
-    return request<{
+    const res = await request<{
       init_point: string;
       sandbox_init_point?: string;
       preference_id?: string;
       slot_id?: string;
+      lock_token?: string;
     }>('/payments/create-preference', {
       method: 'POST',
       skipAuth: true,
       body: JSON.stringify(payload),
     });
+    saveLockToken(res.slot_id || payload.slotId, res.lock_token);
+    return res;
   },
 
   async getBarberMe(tokenOverride?: string | null): Promise<{
@@ -284,32 +322,38 @@ export const api = {
     collection_status?: string;
     preference_id?: string;
   }): Promise<WebhookSimulationResponse & { released?: boolean; barber_slug?: string }> {
-    return request<WebhookSimulationResponse & { released?: boolean; barber_slug?: string }>(
+    const slotId = payload.slotId || payload.external_reference;
+    const lockToken = getLockToken(slotId);
+    const res = await request<WebhookSimulationResponse & { released?: boolean; barber_slug?: string }>(
       '/payments/confirm-return',
       {
         method: 'POST',
         skipAuth: true,
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ ...payload, ...(lockToken ? { lock_token: lockToken } : {}) }),
       },
     );
+    if (res.released || (res.processed && res.status === 'CONFIRMED')) {
+      clearLockToken(slotId);
+    }
+    return res;
   },
 
-  async releaseSlotLock(
-    slotId: string,
-    clientDni?: string,
-    preferenceId?: string,
-  ) {
-    return request<{ released: boolean; slot_id: string }>(
+  async releaseSlotLock(slotId: string) {
+    const lockToken = getLockToken(slotId);
+    if (!lockToken) {
+      // Sin token no se puede liberar: el bloqueo vence solo a los 10 minutos.
+      return { released: false, slot_id: slotId };
+    }
+    const res = await request<{ released: boolean; slot_id: string }>(
       `/appointments/${encodeURIComponent(slotId)}/release-lock`,
       {
         method: 'POST',
         skipAuth: true,
-        body: JSON.stringify({
-          ...(clientDni ? { clientDni } : {}),
-          ...(preferenceId ? { preferenceId } : {}),
-        }),
+        body: JSON.stringify({ lock_token: lockToken }),
       },
     );
+    clearLockToken(slotId);
+    return res;
   },
 
   async getClientSlots(): Promise<{ slots: ClientAppointmentSlot[] }> {

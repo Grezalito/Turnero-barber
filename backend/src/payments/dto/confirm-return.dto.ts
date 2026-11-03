@@ -1,4 +1,4 @@
-import { IsOptional, IsString } from 'class-validator';
+import { IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class ConfirmReturnDto {
   @IsString()
@@ -32,4 +32,10 @@ export class ConfirmReturnDto {
   @IsString()
   @IsOptional()
   preference_id?: string;
+
+  /** Token del bloqueo: obligatorio para que un retorno `rejected` libere el turno. */
+  @IsString()
+  @IsOptional()
+  @MaxLength(128)
+  lock_token?: string;
 }

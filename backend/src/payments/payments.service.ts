@@ -8,7 +8,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Prisma, Role, SlotStatus } from '@prisma/client';
+import { OrphanPaymentStatus, Prisma, Role, SlotStatus } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 import { MailService } from '../mail/mail.service';
@@ -23,9 +23,43 @@ import {
 } from '../security/pii-sanitizer.util';
 import { ConfirmReturnDto } from './dto/confirm-return.dto';
 import { CreatePreferenceDto } from './dto/create-preference.dto';
+import {
+  generateLockToken,
+  hashLockToken,
+  isWellFormedLockToken,
+} from '../appointments/lock-token.util';
 import { MercadoPagoService } from './mercadopago.service';
 
 export const PLATFORM_DEPOSIT_ARS = 2000;
+const MAX_CONFIRMATION_ATTEMPTS = 5;
+
+type OrphanReason =
+  | 'SLOT_NOT_FOUND'
+  | 'SLOT_CANCELLED'
+  | 'DUPLICATE_PAYMENT'
+  | 'SLOT_TAKEN_BY_OTHER_CLIENT'
+  | 'MISSING_CLIENT_BINDING';
+
+type ResolvedPayment = {
+  status: string;
+  externalReference: string | undefined;
+  /** Cliente titular del bloqueo según la metadata de la preferencia de MP. */
+  clientId: string | undefined;
+  amount: number | undefined;
+  simulated: boolean;
+};
+
+type ConfirmationOutcome =
+  | { kind: 'ALREADY_PROCESSED'; slot: any }
+  | { kind: 'TRANSITIONED'; slot: any }
+  | { kind: 'ORPHAN'; reason: OrphanReason }
+  | { kind: 'ALREADY_RECORDED_ORPHAN'; reason: string };
+
+class ConcurrentSlotChangeError extends Error {
+  constructor() {
+    super('El turno cambió durante la confirmación del pago');
+  }
+}
 export const SLOT_DURATION_MS = 30 * 60 * 1000;
 export const LOCK_DURATION_MS = 10 * 60 * 1000;
 export const NON_REFUNDABLE_DEPOSIT_POLICY =
@@ -79,6 +113,7 @@ export class PaymentsService {
     preference_id: string;
     slot_id: string;
     deposit_amount: number;
+    lock_token?: string;
   }> {
     const cleanDni = dto.clientDni.replace(/\D/g, '');
     const now = new Date();
@@ -132,7 +167,11 @@ export class PaymentsService {
         );
       }
 
+      const lockToken = generateLockToken();
       const lockedSlot = await this.prisma.$transaction(async (tx) => {
+        // Guest checkout identificado solo por DNI: NO se permite re-bloquear un turno ya bloqueado por
+        // el mismo DNI (eso permitiría a un tercero que conozca el DNI obtener un lockToken nuevo y
+        // liberar el bloqueo ajeno). Solo turnos libres o con bloqueo vencido.
         const updateResult = await tx.appointmentSlot.updateMany({
           where: {
             id: dto.slotId,
@@ -142,10 +181,6 @@ export class PaymentsService {
                 status: SlotStatus.PENDING_PAYMENT,
                 locked_until: { lt: now },
               },
-              {
-                status: SlotStatus.PENDING_PAYMENT,
-                client_id: clientUser.id,
-              },
             ],
           },
           data: {
@@ -153,6 +188,7 @@ export class PaymentsService {
             client_id: clientUser.id,
             locked_until: lockedUntil,
             deposit_amount: PLATFORM_DEPOSIT_ARS,
+            lock_token_hash: lockToken.hash,
           },
         });
 
@@ -176,6 +212,8 @@ export class PaymentsService {
           startTime: lockedSlot.start_time,
           clientDni: cleanDni,
           clientName: dto.clientName.trim(),
+          clientId: clientUser.id,
+          lockTokenHash: lockToken.hash,
         });
 
         await this.prisma.appointmentSlot.update({
@@ -189,6 +227,7 @@ export class PaymentsService {
           preference_id: preference.preference_id,
           slot_id: lockedSlot.id,
           deposit_amount: PLATFORM_DEPOSIT_ARS,
+          lock_token: lockToken.token,
         };
       } catch (err) {
         // Rollback inmediato del bloqueo si falla la creación de preferencia en Mercado Pago
@@ -197,13 +236,14 @@ export class PaymentsService {
             where: {
               id: lockedSlot.id,
               status: SlotStatus.PENDING_PAYMENT,
-              client_id: clientUser.id,
+              lock_token_hash: lockToken.hash,
             },
             data: {
               status: SlotStatus.AVAILABLE,
               client_id: null,
               locked_until: null,
               mp_preference_id: null,
+              lock_token_hash: null,
             },
           })
           .catch(() => undefined);
@@ -220,6 +260,7 @@ export class PaymentsService {
         startTime: now,
         clientDni: cleanDni,
         clientName: dto.clientName.trim(),
+        clientId: clientUser.id,
       });
 
       return {
@@ -245,6 +286,10 @@ export class PaymentsService {
     startTime: Date;
     clientDni: string;
     clientName?: string;
+    /** Cliente titular del bloqueo: viaja en metadata y se valida al confirmar el pago. */
+    clientId: string;
+    /** Hash del lockToken: identifica unívocamente este bloqueo (clave de idempotencia de MP). */
+    lockTokenHash?: string;
   }): Promise<PreferenceResult> {
     const mpAccessToken = (
       this.configService.get<string>('MP_ACCESS_TOKEN') || ''
@@ -289,6 +334,11 @@ export class PaymentsService {
         },
       },
       external_reference: params.slotId,
+      // Vincula el pago con el bloqueo exacto: se valida contra la agenda al confirmar (anti lock-mismatch).
+      metadata: {
+        slot_id: params.slotId,
+        client_id: params.clientId,
+      },
       back_urls: {
         success: `${returnBaseUrl}?payment_status=approved&slot=${encodeURIComponent(params.slotId)}`,
         failure: `${returnBaseUrl}?payment_status=rejected&slot=${encodeURIComponent(params.slotId)}`,
@@ -314,6 +364,13 @@ export class PaymentsService {
     try {
       preference = await this.mercadoPagoService.createPreference(
         preferencePayload as any,
+        {
+          // Una clave por bloqueo: reintentos del mismo bloqueo son idempotentes, pero un bloqueo
+          // nuevo (otro cliente u otro intento) nunca reutiliza la preferencia de uno anterior.
+          idempotencyKey: `pref-${params.slotId}-${(
+            params.lockTokenHash || crypto.randomBytes(16).toString('hex')
+          ).slice(0, 32)}`,
+        },
       );
     } catch (err) {
       this.logger.error(
@@ -365,6 +422,7 @@ export class PaymentsService {
     }
 
     // Si el retorno indica rechazo o cancelación explícita, liberamos el bloqueo temporal
+    // SOLO si quien llama presenta el lockToken del bloqueo (update condicional sobre el hash).
     if (
       slotId &&
       (rawStatus === 'rejected' ||
@@ -372,22 +430,41 @@ export class PaymentsService {
         rawStatus === 'cancelled' ||
         rawStatus === 'null')
     ) {
-      const released = await this.prisma.appointmentSlot.updateMany({
-        where: {
-          id: slotId,
-          status: SlotStatus.PENDING_PAYMENT,
-        },
-        data: {
-          status: SlotStatus.AVAILABLE,
-          client_id: null,
-          locked_until: null,
-          mp_preference_id: null,
-        },
-      });
+      const lockToken = (dto.lock_token || '').trim();
+      const released = isWellFormedLockToken(lockToken)
+        ? await this.prisma.appointmentSlot.updateMany({
+            where: {
+              id: slotId,
+              status: SlotStatus.PENDING_PAYMENT,
+              lock_token_hash: hashLockToken(lockToken),
+            },
+            data: {
+              status: SlotStatus.AVAILABLE,
+              client_id: null,
+              locked_until: null,
+              mp_preference_id: null,
+              lock_token_hash: null,
+            },
+          })
+        : { count: 0 };
+
+      if (released.count === 0) {
+        this.logger.warn(
+          `[SECURITY_AUDIT] event=LOCK_RELEASE_DENIED source=confirm-return reason=${lockToken ? 'LOCK_TOKEN_MISMATCH' : 'LOCK_TOKEN_MISSING'} slotId=${sanitizeControlChars(slotId)}`,
+        );
+        return {
+          processed: false,
+          released: false,
+          slot_id: slotId,
+          status: rawStatus,
+          reason:
+            'El pago no se completó. El horario se liberará automáticamente al vencer el bloqueo.',
+        };
+      }
 
       return {
         processed: false,
-        released: released.count > 0,
+        released: true,
         slot_id: slotId,
         status: SlotStatus.AVAILABLE,
         reason: 'El pago fue rechazado o cancelado y el horario fue liberado.',
@@ -405,7 +482,13 @@ export class PaymentsService {
         },
       });
 
-      if (existingSlot && existingSlot.status === SlotStatus.CONFIRMED) {
+      // Solo es "ya confirmado" para quien trae ESE pago (o no trae ninguno). Un pago distinto sobre
+      // un turno confirmado se procesa abajo y termina como OrphanPayment (REQUIRES_REFUND).
+      if (
+        existingSlot &&
+        existingSlot.status === SlotStatus.CONFIRMED &&
+        (!rawPaymentId || existingSlot.mp_payment_id === rawPaymentId)
+      ) {
         const latestReminder = existingSlot.reminders[0];
         return {
           received: true,
@@ -574,125 +657,58 @@ export class PaymentsService {
 
     const slotId = paymentDetails.externalReference;
 
-    type TxResult =
-      | { kind: 'ALREADY_PROCESSED'; slot: any }
-      | { kind: 'NOT_FOUND' }
-      | { kind: 'ALREADY_CONFIRMED'; slot: any }
-      | { kind: 'TRANSITIONED'; slot: any };
-
-    let txResult: TxResult;
-
-    try {
-      txResult = await this.prisma.$transaction(async (tx) => {
-        // 1. Verificar si algún slot ya fue confirmado con este mp_payment_id
-        const existingByPayment = await tx.appointmentSlot.findUnique({
-          where: { mp_payment_id: mpPaymentId },
-          include: {
-            barber: { include: { user: true } },
-            client: true,
-            reminders: { orderBy: { created_at: 'desc' }, take: 1 },
-          },
-        });
-
-        if (existingByPayment) {
-          return { kind: 'ALREADY_PROCESSED', slot: existingByPayment };
+    let txResult: ConfirmationOutcome | undefined;
+    for (let attempt = 1; attempt <= MAX_CONFIRMATION_ATTEMPTS; attempt++) {
+      try {
+        txResult = await this.prisma.$transaction((tx) =>
+          this.decidePaymentConfirmation(tx, mpPaymentId, slotId, paymentDetails),
+        );
+        break;
+      } catch (err) {
+        if (err instanceof ConcurrentSlotChangeError) {
+          // Otro proceso cambió el turno entre la lectura y el update condicional: re-evaluar.
+          continue;
         }
-
-        // 2. Verificar que el slot por external_reference exista y no esté ya CONFIRMED
-        const currentSlot = await tx.appointmentSlot.findUnique({
-          where: { id: slotId },
-          include: {
-            barber: { include: { user: true } },
-            client: true,
-            reminders: { orderBy: { created_at: 'desc' }, take: 1 },
-          },
-        });
-
-        if (!currentSlot) {
-          return { kind: 'NOT_FOUND' };
+        if (
+          err instanceof Prisma.PrismaClientKnownRequestError &&
+          err.code === 'P2002'
+        ) {
+          // Colisión unique (mp_payment_id en slot u orphan): otra ejecución concurrente ya lo registró.
+          continue;
         }
-
-        if (currentSlot.status === SlotStatus.CONFIRMED) {
-          return { kind: 'ALREADY_CONFIRMED', slot: currentSlot };
-        }
-
-        // 3. Update condicional atómico para prevenir carreras concurrentes
-        const updateRes = await tx.appointmentSlot.updateMany({
-          where: {
-            id: currentSlot.id,
-            status: { not: SlotStatus.CONFIRMED },
-          },
-          data: {
-            status: SlotStatus.CONFIRMED,
-            mp_payment_id: mpPaymentId,
-            locked_until: null,
-            deposit_amount: PLATFORM_DEPOSIT_ARS,
-          },
-        });
-
-        if (updateRes.count === 0) {
-          const reloaded = await tx.appointmentSlot.findUnique({
-            where: { id: currentSlot.id },
-            include: {
-              barber: { include: { user: true } },
-              client: true,
-              reminders: { orderBy: { created_at: 'desc' }, take: 1 },
-            },
-          });
-          return { kind: 'ALREADY_CONFIRMED', slot: reloaded || currentSlot };
-        }
-
-        const updated = await tx.appointmentSlot.findUnique({
-          where: { id: currentSlot.id },
-          include: {
-            barber: { include: { user: true } },
-            client: true,
-            reminders: { orderBy: { created_at: 'desc' }, take: 1 },
-          },
-        });
-
-        return { kind: 'TRANSITIONED', slot: updated! };
-      });
-    } catch (err) {
-      if (
-        err instanceof Prisma.PrismaClientKnownRequestError &&
-        err.code === 'P2002'
-      ) {
-        // Colisión unique sobre mp_payment_id: concurrencia idempotente
-        const existing = await this.prisma.appointmentSlot.findUnique({
-          where: { mp_payment_id: mpPaymentId },
-          include: {
-            barber: { include: { user: true } },
-            client: true,
-            reminders: { orderBy: { created_at: 'desc' }, take: 1 },
-          },
-        });
-        if (existing) {
-          txResult = { kind: 'ALREADY_PROCESSED', slot: existing };
-        } else {
-          throw err;
-        }
-      } else {
         throw err;
       }
     }
 
-    if (txResult.kind === 'NOT_FOUND') {
-      this.logger.warn(
-        `No existe el turno con id ${slotId} para el pago ${mpPaymentId}`,
+    if (!txResult) {
+      throw new Error(
+        `No se pudo resolver la confirmación del pago ${mpPaymentId} tras ${MAX_CONFIRMATION_ATTEMPTS} intentos concurrentes`,
       );
-      return { received: true, processed: false, error: 'Slot not found' };
+    }
+
+    if (txResult.kind === 'ORPHAN' || txResult.kind === 'ALREADY_RECORDED_ORPHAN') {
+      if (txResult.kind === 'ORPHAN') {
+        this.logger.error(
+          `[SECURITY_AUDIT][PAYMENT_MISMATCH] severity=HIGH event=ORPHAN_PAYMENT_RECORDED status=REQUIRES_REFUND reason=${txResult.reason} mpPaymentId=${sanitizeControlChars(mpPaymentId)} slotId=${sanitizeControlChars(slotId)} amount=${paymentDetails.amount}`,
+        );
+      }
+      return {
+        received: true,
+        processed: false,
+        idempotent: txResult.kind === 'ALREADY_RECORDED_ORPHAN',
+        status: OrphanPaymentStatus.REQUIRES_REFUND,
+        reason: txResult.reason,
+        slot_id: slotId,
+        mp_payment_id: mpPaymentId,
+      };
     }
 
     const confirmedSlot = txResult.slot;
 
-    // Si ya fue procesado o confirmado previamente, devolver idempotentemente sin re-ejecutar efectos secundarios
-    if (
-      txResult.kind === 'ALREADY_PROCESSED' ||
-      txResult.kind === 'ALREADY_CONFIRMED'
-    ) {
+    // Si ya fue procesado previamente, devolver idempotentemente sin re-ejecutar efectos secundarios
+    if (txResult.kind === 'ALREADY_PROCESSED') {
       this.logger.log(
-        `[Idempotencia] Pago ${mpPaymentId} ya fue procesado o slot ${confirmedSlot.id} ya confirmado.`,
+        `[Idempotencia] Pago ${mpPaymentId} ya fue procesado para el slot ${confirmedSlot.id}.`,
       );
       const latestRem = confirmedSlot.reminders?.[0];
       return {
@@ -774,6 +790,133 @@ export class PaymentsService {
   }
 
   /**
+   * Decide, dentro de la transacción, qué hacer con un pago aprobado y verificado contra MP.
+   * Nunca pisa un turno de otro cliente: los pagos que no corresponden al bloqueo vigente se
+   * registran como OrphanPayment (REQUIRES_REFUND).
+   *
+   * | Estado del turno                         | Resultado                                   |
+   * |------------------------------------------|---------------------------------------------|
+   * | ya tiene este mp_payment_id              | ALREADY_PROCESSED (idempotente)             |
+   * | inexistente / CANCELLED                  | ORPHAN                                      |
+   * | CONFIRMED (otro pago)                    | ORPHAN (DUPLICATE_PAYMENT / SLOT_TAKEN)     |
+   * | PENDING_PAYMENT del mismo cliente        | CONFIRMA                                    |
+   * | PENDING_PAYMENT de otro cliente, vigente | ORPHAN (SLOT_TAKEN_BY_OTHER_CLIENT)         |
+   * | PENDING_PAYMENT de otro cliente, vencido | CONFIRMA reasignando al cliente del pago    |
+   * | AVAILABLE (bloqueo expirado y liberado)  | CONFIRMA reasignando al cliente del pago    |
+   *
+   * Todas las transiciones usan updates condicionales sobre el estado leído; si otro proceso lo
+   * modificó en el medio se lanza ConcurrentSlotChangeError y el llamador re-evalúa.
+   */
+  private async decidePaymentConfirmation(
+    tx: Prisma.TransactionClient,
+    mpPaymentId: string,
+    slotId: string,
+    payment: ResolvedPayment,
+  ): Promise<ConfirmationOutcome> {
+    const slotInclude = {
+      barber: { include: { user: true } },
+      client: true,
+      reminders: { orderBy: { created_at: 'desc' as const }, take: 1 },
+    };
+
+    const existingByPayment = await tx.appointmentSlot.findUnique({
+      where: { mp_payment_id: mpPaymentId },
+      include: slotInclude,
+    });
+    if (existingByPayment) {
+      return { kind: 'ALREADY_PROCESSED', slot: existingByPayment };
+    }
+
+    const existingOrphan = await tx.orphanPayment.findUnique({
+      where: { mp_payment_id: mpPaymentId },
+    });
+    if (existingOrphan) {
+      return { kind: 'ALREADY_RECORDED_ORPHAN', reason: existingOrphan.reason };
+    }
+
+    const slot = await tx.appointmentSlot.findUnique({
+      where: { id: slotId },
+      include: slotInclude,
+    });
+
+    // Cliente al que pertenece el pago. En pagos reales viene de la metadata de la preferencia;
+    // solo las simulaciones de desarrollo pueden heredar el titular actual del bloqueo.
+    const payerClientId =
+      payment.clientId ?? (payment.simulated ? slot?.client_id ?? undefined : undefined);
+
+    const orphan = async (reason: OrphanReason): Promise<ConfirmationOutcome> => {
+      await tx.orphanPayment.create({
+        data: {
+          mp_payment_id: mpPaymentId,
+          slot_id: slot ? slot.id : slotId,
+          client_id: payerClientId ?? null,
+          amount: payment.amount ?? null,
+          reason,
+        },
+      });
+      return { kind: 'ORPHAN', reason };
+    };
+
+    if (!slot) return orphan('SLOT_NOT_FOUND');
+    if (!payerClientId) return orphan('MISSING_CLIENT_BINDING');
+
+    if (slot.status === SlotStatus.CANCELLED) return orphan('SLOT_CANCELLED');
+
+    if (slot.status === SlotStatus.CONFIRMED) {
+      return orphan(
+        slot.client_id === payerClientId
+          ? 'DUPLICATE_PAYMENT'
+          : 'SLOT_TAKEN_BY_OTHER_CLIENT',
+      );
+    }
+
+    const now = new Date();
+    if (
+      slot.status === SlotStatus.PENDING_PAYMENT &&
+      slot.client_id !== payerClientId &&
+      slot.locked_until &&
+      slot.locked_until > now
+    ) {
+      // El bloqueo del pagador expiró y otro cliente tiene hoy un bloqueo vigente: no se le pisa el turno.
+      return orphan('SLOT_TAKEN_BY_OTHER_CLIENT');
+    }
+
+    // Transición condicional sobre exactamente el estado leído (status + titular + vencimiento).
+    const updateRes = await tx.appointmentSlot.updateMany({
+      where: {
+        id: slot.id,
+        status: slot.status,
+        client_id: slot.client_id,
+        locked_until: slot.locked_until,
+      },
+      data: {
+        status: SlotStatus.CONFIRMED,
+        client_id: payerClientId,
+        mp_payment_id: mpPaymentId,
+        locked_until: null,
+        lock_token_hash: null,
+        deposit_amount: PLATFORM_DEPOSIT_ARS,
+      },
+    });
+
+    if (updateRes.count === 0) {
+      throw new ConcurrentSlotChangeError();
+    }
+
+    if (slot.client_id !== payerClientId) {
+      this.logger.warn(
+        `[SECURITY_AUDIT] event=LATE_PAYMENT_REASSIGNED slotId=${slot.id} mpPaymentId=${sanitizeControlChars(mpPaymentId)} previousStatus=${slot.status}`,
+      );
+    }
+
+    const updated = await tx.appointmentSlot.findUniqueOrThrow({
+      where: { id: slot.id },
+      include: slotInclude,
+    });
+    return { kind: 'TRANSITIONED', slot: updated };
+  }
+
+  /**
    * Verifica la autenticidad del pago contra la API de Mercado Pago (verify-then-fetch).
    * En producción (NODE_ENV=production) exige estrictamente consultar https://api.mercadopago.com/v1/payments/:id
    * con MP_ACCESS_TOKEN y nunca confía en el body plano del request.
@@ -782,10 +925,7 @@ export class PaymentsService {
   private async resolvePaymentDetails(
     mpPaymentId: string,
     simulatedPayload?: Record<string, any>,
-  ): Promise<{
-    status: string;
-    externalReference: string | undefined;
-  } | null> {
+  ): Promise<ResolvedPayment | null> {
     const isProd = this.isProductionEnv();
     const mpAccessToken = (
       this.configService.get<string>('MP_ACCESS_TOKEN') || ''
@@ -808,6 +948,11 @@ export class PaymentsService {
       return {
         status: String(simulatedPayload.status),
         externalReference: String(simulatedPayload.external_reference),
+        clientId: simulatedPayload.client_id
+          ? String(simulatedPayload.client_id)
+          : undefined,
+        amount: PLATFORM_DEPOSIT_ARS,
+        simulated: true,
       };
     }
 
@@ -825,6 +970,7 @@ export class PaymentsService {
         status?: string;
         external_reference?: string;
         transaction_amount?: number;
+        metadata?: Record<string, unknown> | null;
       };
 
       if (!paymentData || !paymentData.status) {
@@ -835,20 +981,28 @@ export class PaymentsService {
       }
 
       if (
-        typeof paymentData.transaction_amount === 'number' &&
+        typeof paymentData.transaction_amount !== 'number' ||
         paymentData.transaction_amount < PLATFORM_DEPOSIT_ARS
       ) {
         this.logger.warn(
-          `Pago ${mpPaymentId} rechazado por monto insuficiente (${paymentData.transaction_amount} < ${PLATFORM_DEPOSIT_ARS}).`,
+          `Pago ${mpPaymentId} rechazado por monto insuficiente o ausente (${paymentData.transaction_amount} < ${PLATFORM_DEPOSIT_ARS}).`,
         );
         return null;
       }
+
+      const metadataClientId = paymentData.metadata?.client_id;
 
       return {
         status: String(paymentData.status),
         externalReference: paymentData.external_reference
           ? String(paymentData.external_reference)
           : undefined,
+        clientId:
+          typeof metadataClientId === 'string' && metadataClientId
+            ? metadataClientId
+            : undefined,
+        amount: paymentData.transaction_amount,
+        simulated: false,
       };
     } catch (error) {
       this.logger.warn(
@@ -857,4 +1011,5 @@ export class PaymentsService {
       return null;
     }
   }
+
 }

@@ -13,6 +13,8 @@ describe('PaymentsService - Idempotencia de Webhooks', () => {
   let reminderProviderMock: any;
   let mailServiceMock: any;
   let mercadoPagoServiceMock: any;
+  let slotInDb: any;
+  let orphans: any[];
 
   const mockSlotId = 'slot-id-100';
   const mockPaymentId = 'mp-pay-unique-999';
@@ -20,7 +22,9 @@ describe('PaymentsService - Idempotencia de Webhooks', () => {
   beforeEach(async () => {
     const baseSlot = {
       id: mockSlotId,
-      status: SlotStatus.AVAILABLE,
+      status: SlotStatus.PENDING_PAYMENT,
+      client_id: 'client-1',
+      locked_until: new Date(Date.now() + 10 * 60_000),
       start_time: new Date('2026-11-04T14:00:00Z'),
       end_time: new Date('2026-11-04T14:30:00Z'),
       deposit_amount: 2000,
@@ -47,7 +51,8 @@ describe('PaymentsService - Idempotencia de Webhooks', () => {
       reminders: [],
     };
 
-    let slotInDb: any = { ...baseSlot };
+    slotInDb = { ...baseSlot };
+    orphans = [];
 
     prismaMock = {
       appointmentSlot: {
@@ -63,19 +68,26 @@ describe('PaymentsService - Idempotencia de Webhooks', () => {
           }
           return null;
         }),
+        findUniqueOrThrow: jest.fn(async () => slotInDb),
         updateMany: jest.fn(async ({ where, data }: any) => {
           if (
             where.id === mockSlotId &&
-            slotInDb.status !== SlotStatus.CONFIRMED
+            where.status === slotInDb.status &&
+            where.client_id === slotInDb.client_id
           ) {
-            slotInDb = {
-              ...slotInDb,
-              status: data.status,
-              mp_payment_id: data.mp_payment_id,
-            };
+            slotInDb = { ...slotInDb, ...data };
             return { count: 1 };
           }
           return { count: 0 };
+        }),
+      },
+      orphanPayment: {
+        findUnique: jest.fn(async ({ where }: any) =>
+          orphans.find((o) => o.mp_payment_id === where.mp_payment_id) ?? null,
+        ),
+        create: jest.fn(async ({ data }: any) => {
+          orphans.push(data);
+          return data;
         }),
       },
       $transaction: jest.fn(async (cb: (tx: any) => Promise<any>) => {
@@ -104,6 +116,7 @@ describe('PaymentsService - Idempotencia de Webhooks', () => {
         status: 'approved',
         external_reference: mockSlotId,
         transaction_amount: 2000,
+        metadata: { slot_id: mockSlotId, client_id: 'client-1' },
       }),
       isPaymentNotification: jest.fn().mockReturnValue(true),
     };
@@ -150,5 +163,57 @@ describe('PaymentsService - Idempotencia de Webhooks', () => {
     // Los efectos secundarios NO deben haberse llamado una segunda vez
     expect(reminderProviderMock.scheduleForConfirmedSlot).toHaveBeenCalledTimes(1);
     expect(mailServiceMock.sendAppointmentConfirmationEmails).toHaveBeenCalledTimes(1);
+  });
+
+  it('pago de otro cliente sobre un bloqueo vigente se registra como OrphanPayment sin tocar el turno', async () => {
+    mercadoPagoServiceMock.getPayment.mockResolvedValue({
+      id: 'mp-pay-late-A',
+      status: 'approved',
+      external_reference: mockSlotId,
+      transaction_amount: 2000,
+      metadata: { slot_id: mockSlotId, client_id: 'client-A-expired' },
+    });
+
+    const result = await service.processPaymentNotification('mp-pay-late-A');
+
+    expect(result.processed).toBe(false);
+    expect(result.status).toBe('REQUIRES_REFUND');
+    expect(result.reason).toBe('SLOT_TAKEN_BY_OTHER_CLIENT');
+    expect(slotInDb.status).toBe(SlotStatus.PENDING_PAYMENT);
+    expect(slotInDb.client_id).toBe('client-1');
+    expect(orphans).toHaveLength(1);
+    expect(reminderProviderMock.scheduleForConfirmedSlot).not.toHaveBeenCalled();
+  });
+
+  it('segundo pago distinto sobre un turno ya confirmado queda como DUPLICATE_PAYMENT', async () => {
+    await service.processPaymentNotification(mockPaymentId);
+    mercadoPagoServiceMock.getPayment.mockResolvedValue({
+      id: 'mp-pay-second',
+      status: 'approved',
+      external_reference: mockSlotId,
+      transaction_amount: 2000,
+      metadata: { slot_id: mockSlotId, client_id: 'client-1' },
+    });
+
+    const result = await service.processPaymentNotification('mp-pay-second');
+
+    expect(result.status).toBe('REQUIRES_REFUND');
+    expect(result.reason).toBe('DUPLICATE_PAYMENT');
+    expect(slotInDb.mp_payment_id).toBe(mockPaymentId);
+    expect(reminderProviderMock.scheduleForConfirmedSlot).toHaveBeenCalledTimes(1);
+  });
+
+  it('pago real sin metadata de cliente no confirma (MISSING_CLIENT_BINDING)', async () => {
+    mercadoPagoServiceMock.getPayment.mockResolvedValue({
+      id: 'mp-pay-nometa',
+      status: 'approved',
+      external_reference: mockSlotId,
+      transaction_amount: 2000,
+    });
+
+    const result = await service.processPaymentNotification('mp-pay-nometa');
+
+    expect(result.reason).toBe('MISSING_CLIENT_BINDING');
+    expect(slotInDb.status).toBe(SlotStatus.PENDING_PAYMENT);
   });
 });

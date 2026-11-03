@@ -20,6 +20,12 @@ enum SlotStatus {
   CANCELLED
 }
 
+enum OrphanPaymentStatus {
+  REQUIRES_REFUND
+  REFUNDED
+  RESOLVED
+}
+
 enum ReminderStatus {
   PENDING
   SENT
@@ -93,6 +99,8 @@ model AppointmentSlot {
   deposit_amount   Int             @default(2000)
   mp_payment_id    String?         @unique
   mp_preference_id String?
+  /// SHA-256 (hex) del lockToken entregado al cliente al bloquear el turno. Nunca se guarda el token en claro.
+  lock_token_hash  String?
   reminders        ReminderQueue[]
   created_at       DateTime        @default(now())
   updated_at       DateTime        @updatedAt
@@ -117,4 +125,22 @@ model ReminderQueue {
 
   @@index([status, scheduled_for])
   @@map("reminder_queue")
+}
+
+/// Pagos aprobados por Mercado Pago que no pudieron asociarse a un turno
+/// (turno tomado por otro cliente, pago duplicado, turno cancelado, etc.).
+/// Requieren reembolso o revisión manual; nunca se pisa la agenda.
+model OrphanPayment {
+  id            String              @id @default(uuid())
+  mp_payment_id String              @unique
+  slot_id       String?
+  client_id     String?
+  amount        Float?
+  reason        String
+  status        OrphanPaymentStatus @default(REQUIRES_REFUND)
+  created_at    DateTime            @default(now())
+  updated_at    DateTime            @updatedAt
+
+  @@index([status])
+  @@map("orphan_payments")
 }

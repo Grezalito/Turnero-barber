@@ -1,17 +1,27 @@
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { json, urlencoded } from 'express';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
+import { resolveJwtSecret } from './auth/jwt-secret.util';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
-  const app = await NestFactory.create(AppModule);
 
-  const expressInstance = app.getHttpAdapter().getInstance();
-  if (expressInstance && typeof expressInstance.disable === 'function') {
-    expressInstance.disable('x-powered-by');
-    expressInstance.set('trust proxy', 1);
+  // Fail-fast: sin JWT_SECRET robusto la API no arranca (no existe secret por defecto).
+  try {
+    resolveJwtSecret(process.env.JWT_SECRET);
+  } catch (err) {
+    logger.error(`[SECURITY_AUDIT] event=STARTUP_ABORTED reason=${(err as Error).message}`);
+    process.exit(1);
   }
+
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+
+  app.disable('x-powered-by');
+  // Un único proxy reverso de confianza (Render / Nginx): req.ip toma la IP que agrega ese proxy
+  // y descarta los valores de X-Forwarded-For enviados por el cliente.
+  app.set('trust proxy', 1);
 
   // Límite estricto de tamaño de payload (64 KB) contra ataques de agotamiento de memoria (SOC 2 A1.1 / ISO 27001 A.8.6)
   app.use(json({ limit: '64kb' }));

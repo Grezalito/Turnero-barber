@@ -22,6 +22,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { AppointmentsService } from './appointments.service';
 import { LockSlotDto } from './dto/lock-slot.dto';
 import { ManageBarberSlotsDto } from './dto/manage-slots.dto';
+import { ReleaseLockDto } from './dto/release-lock.dto';
 
 @Controller('appointments')
 export class AppointmentsController {
@@ -88,13 +89,9 @@ export class AppointmentsController {
   @Post(':slotId/release-lock')
   async releaseLock(
     @Param('slotId') slotId: string,
-    @Body() body?: { clientDni?: string; preferenceId?: string },
+    @Body() dto: ReleaseLockDto,
   ) {
-    return this.appointmentsService.releaseSingleLock(
-      slotId,
-      body?.clientDni,
-      body?.preferenceId,
-    );
+    return this.appointmentsService.releaseSingleLock(slotId, dto.lock_token);
   }
 
   @Public()

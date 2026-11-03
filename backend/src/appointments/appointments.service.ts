@@ -24,6 +24,11 @@ import {
   sanitizeControlChars,
 } from '../security/pii-sanitizer.util';
 import { LockSlotDto } from './dto/lock-slot.dto';
+import {
+  generateLockToken,
+  hashLockToken,
+  isWellFormedLockToken,
+} from './lock-token.util';
 import { ManageBarberSlotsDto } from './dto/manage-slots.dto';
 import {
   calculateWeeklyGoalMetrics,
@@ -86,6 +91,7 @@ export class AppointmentsService {
               locked_until: null,
               mp_payment_id: null,
               mp_preference_id: null,
+              lock_token_hash: null,
               deposit_amount: PLATFORM_DEPOSIT_ARS,
             },
           });
@@ -225,6 +231,7 @@ export class AppointmentsService {
                 locked_until: null,
                 mp_payment_id: null,
                 mp_preference_id: null,
+                lock_token_hash: null,
                 deposit_amount: PLATFORM_DEPOSIT_ARS,
               },
             })
@@ -469,6 +476,7 @@ export class AppointmentsService {
         data: {
           status: SlotStatus.CANCELLED,
           locked_until: null,
+          lock_token_hash: null,
         },
       });
     });
@@ -491,66 +499,45 @@ export class AppointmentsService {
   }
 
   /**
-   * Libera un turno en PENDING_PAYMENT de vuelta a AVAILABLE (ej. pago rechazado o cancelado).
-   * Valida que el turno esté en PENDING_PAYMENT y, si se provee clientDni o preferenceId, que coincida con el titular del bloqueo.
+   * Libera un turno en PENDING_PAYMENT de vuelta a AVAILABLE (ej. el cliente abandona el checkout).
+   * Exige el lockToken emitido al bloquear: la liberación es un update condicional atómico sobre
+   * `lock_token_hash`, por lo que nadie más que el titular del bloqueo puede liberarlo.
    */
-  async releaseSingleLock(
-    slotId: string,
-    clientDni?: string,
-    preferenceId?: string,
-  ) {
-    const slot = await this.prisma.appointmentSlot.findUnique({
-      where: { id: slotId },
-      include: { client: true },
-    });
-
-    if (!slot || slot.status !== SlotStatus.PENDING_PAYMENT) {
-      return {
-        released: false,
-        slot_id: slotId,
-      };
-    }
-
-    const now = new Date();
-    const isExpired = Boolean(slot.locked_until && slot.locked_until <= now);
-
-    if (!isExpired) {
-      if (clientDni) {
-        const cleanDni = clientDni.replace(/\D/g, '');
-        if (slot.client?.dni && slot.client.dni !== cleanDni) {
-          throw new ForbiddenException(
-            'No tenés permisos para liberar el bloqueo de otro cliente',
-          );
-        }
-      }
-      if (
-        preferenceId &&
-        slot.mp_preference_id &&
-        slot.mp_preference_id !== preferenceId
-      ) {
-        throw new ForbiddenException(
-          'La preferencia indicada no coincide con el bloqueo activo',
-        );
-      }
+  async releaseSingleLock(slotId: string, lockToken: string) {
+    if (!isWellFormedLockToken(lockToken)) {
+      throw new ForbiddenException('El token de bloqueo no es válido para este turno');
     }
 
     const result = await this.prisma.appointmentSlot.updateMany({
       where: {
         id: slotId,
         status: SlotStatus.PENDING_PAYMENT,
+        lock_token_hash: hashLockToken(lockToken),
       },
       data: {
         status: SlotStatus.AVAILABLE,
         client_id: null,
         locked_until: null,
         mp_preference_id: null,
+        lock_token_hash: null,
       },
     });
 
-    return {
-      released: result.count > 0,
-      slot_id: slotId,
-    };
+    if (result.count === 0) {
+      const slot = await this.prisma.appointmentSlot.findUnique({
+        where: { id: slotId },
+        select: { status: true },
+      });
+      if (slot?.status === SlotStatus.PENDING_PAYMENT) {
+        this.logger.warn(
+          `[SECURITY_AUDIT] event=LOCK_RELEASE_DENIED reason=LOCK_TOKEN_MISMATCH slotId=${slotId}`,
+        );
+        throw new ForbiddenException('El token de bloqueo no es válido para este turno');
+      }
+      return { released: false, slot_id: slotId };
+    }
+
+    return { released: true, slot_id: slotId };
   }
 
   /**
@@ -645,6 +632,7 @@ export class AppointmentsService {
 
     const now = new Date();
     const lockedUntil = new Date(now.getTime() + LOCK_DURATION_MS);
+    const lockToken = generateLockToken();
 
     // Transacción atómica en Prisma para evitar que dos clientes reserven el mismo bloque simultáneamente
     const lockedSlot = await this.prisma.$transaction(async (tx) => {
@@ -687,6 +675,7 @@ export class AppointmentsService {
           client_id: resolvedAuth.user.id,
           locked_until: lockedUntil,
           deposit_amount: PLATFORM_DEPOSIT_ARS,
+          lock_token_hash: lockToken.hash,
         },
       });
 
@@ -711,6 +700,8 @@ export class AppointmentsService {
         startTime: lockedSlot.start_time,
         clientDni: resolvedAuth.user.dni,
         clientName: resolvedAuth.user.name,
+        clientId: resolvedAuth.user.id,
+        lockTokenHash: lockToken.hash,
       });
 
       const updatedSlot = await this.prisma.appointmentSlot.update({
@@ -733,6 +724,7 @@ export class AppointmentsService {
           mp_preference_id: updatedSlot.mp_preference_id,
         },
         payment: preference,
+        lock_token: lockToken.token,
         ...(resolvedAuth.access_token && {
           access_token: resolvedAuth.access_token,
           user: resolvedAuth.user,
@@ -745,13 +737,14 @@ export class AppointmentsService {
           where: {
             id: lockedSlot.id,
             status: SlotStatus.PENDING_PAYMENT,
-            client_id: resolvedAuth.user.id,
+            lock_token_hash: lockToken.hash,
           },
           data: {
             status: SlotStatus.AVAILABLE,
             client_id: null,
             locked_until: null,
             mp_preference_id: null,
+            lock_token_hash: null,
           },
         })
         .catch(() => undefined);
@@ -777,6 +770,7 @@ export class AppointmentsService {
         client_id: null,
         locked_until: null,
         mp_preference_id: null,
+        lock_token_hash: null,
       },
     });
 

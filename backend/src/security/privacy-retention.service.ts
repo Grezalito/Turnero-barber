@@ -43,6 +43,7 @@ export class PrivacyRetentionService {
           client_id: null,
           locked_until: null,
           mp_preference_id: null,
+          lock_token_hash: null,
         },
       });
 
@@ -120,6 +121,7 @@ export class PrivacyRetentionService {
           client_id: null,
           mp_preference_id: null,
           locked_until: null,
+          lock_token_hash: null,
         },
       });
 
