@@ -56,12 +56,13 @@ export function buildGoogleCalendarUrl(params: {
   const endUtc = toArgentinaRealUtcCalendarTimestamp(params.endTimeIso);
   const deposit = params.depositAmountArs ?? 2000;
 
-  const title = `Corte de Barbería (30 min) - ${params.shopName}`;
+  const minutes = slotDurationMinutes(params.startTimeIso, params.endTimeIso);
+  const title = `Corte de Barbería (${minutes} min) - ${params.shopName}`;
   const location = params.address
     ? `${params.shopName}, ${params.address}`
     : params.shopName;
   const details = [
-    `Turno confirmado de 30 minutos en ${params.shopName}.`,
+    `Turno confirmado de ${minutes} minutos en ${params.shopName}.`,
     params.barberName ? `Barbero: ${params.barberName}.` : '',
     `Seña acreditada: $${deposit.toLocaleString('es-AR')} ARS.`,
     `Comprobante Mercado Pago: ${params.mpPaymentId}.`,
@@ -81,27 +82,80 @@ export function buildGoogleCalendarUrl(params: {
   return url.toString();
 }
 
+/** Duración real del turno en minutos (30, 45, ...). */
+export function slotDurationMinutes(startIso: string, endIso: string): number {
+  return Math.round((new Date(endIso).getTime() - new Date(startIso).getTime()) / 60_000);
+}
+
 /**
- * Construye el link wa.me al teléfono del barbero con el mensaje predeterminado:
- * "Hola! Señé mi turno para el [fecha] a las [hora]. Comprobante: [mp_payment_id]"
+ * Normaliza un teléfono argentino para wa.me (549 + área + número). Devuelve null si no es
+ * válido: nunca se usa un número de relleno (podría pertenecer a un tercero real).
+ * Mantener en sync con backend/src/notifications/whatsapp-link.util.ts.
+ */
+export function normalizeArgentinaWhatsAppNumber(raw?: string | null): string | null {
+  if (!raw) return null;
+  let digits = raw.replace(/\D/g, '');
+  if (!digits) return null;
+  if (digits.startsWith('00')) digits = digits.slice(2);
+  if (digits.startsWith('54')) {
+    digits = digits.slice(2);
+    if (digits.startsWith('9')) digits = digits.slice(1);
+  }
+  if (digits.startsWith('0')) digits = digits.slice(1);
+  const local15 = digits.match(/^(\d{2,4})15(\d{6,8})$/);
+  if (local15 && local15[1].length + local15[2].length === 10) {
+    digits = local15[1] + local15[2];
+  }
+  return digits.length === 10 ? `549${digits}` : null;
+}
+
+/**
+ * Link wa.me al barbero (fallback local si el backend no envió `whatsapp_barber_notify_url`).
  */
 export function buildWhatsAppShareUrl(params: {
   barberPhone?: string | null;
   startTimeIso: string;
   mpPaymentId: string;
-}): string {
-  const cleanPhone = (params.barberPhone || '+5491155667788').replace(
-    /\D/g,
-    '',
-  );
+}): string | null {
+  const phone = normalizeArgentinaWhatsAppNumber(params.barberPhone);
+  if (!phone) return null;
   const fecha = params.startTimeIso.slice(0, 10);
   const d = new Date(params.startTimeIso);
   const hh = String(d.getUTCHours()).padStart(2, '0');
   const mm = String(d.getUTCMinutes()).padStart(2, '0');
-  const hora = `${hh}:${mm}`;
+  const message = `Hola! Señé mi turno para el ${fecha} a las ${hh}:${mm}. Comprobante: ${params.mpPaymentId}`;
+  return `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
+}
 
-  const message = `Hola! Señé mi turno para el ${fecha} a las ${hora}. Comprobante: ${params.mpPaymentId}`;
-  return `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`;
+/** RFC 5545: escapa \\ ; , y saltos de línea en valores TEXT. */
+function escapeIcsText(text: string): string {
+  return text
+    .replace(/\\/g, '\\\\')
+    .replace(/;/g, '\\;')
+    .replace(/,/g, '\\,')
+    .replace(/\r?\n/g, '\\n');
+}
+
+/** RFC 5545 §3.1: líneas de máx. 75 octetos, continuaciones con un espacio inicial. */
+function foldIcsLine(line: string): string {
+  const encoder = new TextEncoder();
+  if (encoder.encode(line).length <= 75) return line;
+  const chunks: string[] = [];
+  let current = '';
+  let currentBytes = 0;
+  for (const char of line) {
+    const charBytes = encoder.encode(char).length;
+    const limit = chunks.length === 0 ? 75 : 74;
+    if (currentBytes + charBytes > limit) {
+      chunks.push(current);
+      current = '';
+      currentBytes = 0;
+    }
+    current += char;
+    currentBytes += charBytes;
+  }
+  chunks.push(current);
+  return chunks.join('\r\n ');
 }
 
 /**
@@ -120,28 +174,45 @@ export function buildLocalIcsContent(params: {
   const nowUtc = toUtcCalendarTimestamp(new Date().toISOString());
   const startUtc = toArgentinaRealUtcCalendarTimestamp(params.startTimeIso);
   const endUtc = toArgentinaRealUtcCalendarTimestamp(params.endTimeIso);
-  const summary = `Corte de Barbería (30 min) - ${params.shopName}`;
+  const minutes = slotDurationMinutes(params.startTimeIso, params.endTimeIso);
+  const summary = `Corte de Barbería (${minutes} min) - ${params.shopName}`;
   const location = params.address || params.shopName;
-  const description = `Reserva confirmada en ${params.shopName}\\nSeña acreditada: $2.000 ARS\\nComprobante MP: ${params.mpPaymentId}\\n${NON_REFUNDABLE_LEGEND}`;
+  const description = [
+    `Reserva confirmada en ${params.shopName}`,
+    'Seña acreditada: $2.000 ARS',
+    `Comprobante MP: ${params.mpPaymentId}`,
+    NON_REFUNDABLE_LEGEND,
+  ]
+    .map(escapeIcsText)
+    .join('\\n');
 
-  return [
-    'BEGIN:VCALENDAR',
-    'VERSION:2.0',
-    'PRODID:-//Turnero Barber//Booking Engine 30m//ES',
-    'CALSCALE:GREGORIAN',
-    'METHOD:PUBLISH',
-    'BEGIN:VEVENT',
-    `UID:slot-${params.slotId}@turnero-barber.local`,
-    `DTSTAMP:${nowUtc}`,
-    `DTSTART:${startUtc}`,
-    `DTEND:${endUtc}`,
-    `SUMMARY:${summary}`,
-    `LOCATION:${location}`,
-    `DESCRIPTION:${description}`,
-    'STATUS:CONFIRMED',
-    'END:VEVENT',
-    'END:VCALENDAR',
-  ].join('\r\n');
+  return (
+    [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//Turnazo//Booking Engine//ES',
+      'CALSCALE:GREGORIAN',
+      'METHOD:PUBLISH',
+      'BEGIN:VEVENT',
+      `UID:slot-${params.slotId}@turnazo.app`,
+      `DTSTAMP:${nowUtc}`,
+      `DTSTART:${startUtc}`,
+      `DTEND:${endUtc}`,
+      `SUMMARY:${escapeIcsText(summary)}`,
+      `LOCATION:${escapeIcsText(location)}`,
+      `DESCRIPTION:${description}`,
+      'STATUS:CONFIRMED',
+      'BEGIN:VALARM',
+      'TRIGGER:-PT2H',
+      'ACTION:DISPLAY',
+      `DESCRIPTION:${escapeIcsText(`Tu turno en ${params.shopName} es en 2 horas`)}`,
+      'END:VALARM',
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ]
+      .map(foldIcsLine)
+      .join('\r\n') + '\r\n'
+  );
 }
 
 /**

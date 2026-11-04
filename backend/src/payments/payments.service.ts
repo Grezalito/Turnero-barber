@@ -29,6 +29,7 @@ import {
   isWellFormedLockToken,
 } from '../appointments/lock-token.util';
 import { MercadoPagoService } from './mercadopago.service';
+import { buildBarberNotificationWhatsAppUrl } from '../notifications/whatsapp-link.util';
 
 export const PLATFORM_DEPOSIT_ARS = 2000;
 const MAX_CONFIRMATION_ATTEMPTS = 5;
@@ -749,8 +750,27 @@ export class PaymentsService {
       });
     }
 
-    const emailResult =
-      await this.mailService.sendAppointmentConfirmationEmails({
+    // Reclamo atómico de la confirmación: nunca se envía dos veces aunque haya reintentos concurrentes.
+    const confirmationClaim = await this.prisma.appointmentSlot.updateMany({
+      where: { id: confirmedSlot.id, confirmation_sent_at: null },
+      data: { confirmation_sent_at: new Date() },
+    });
+
+    const whatsappContext = {
+      clientName: confirmedSlot.client?.name || 'Cliente',
+      clientPhone: confirmedSlot.client?.phone,
+      barberName: confirmedSlot.barber.user.name,
+      barberPhone: confirmedSlot.barber.user.phone,
+      shopName: confirmedSlot.barber.shop_name,
+      startTime: confirmedSlot.start_time,
+      endTime: confirmedSlot.end_time,
+      depositAmountArs: confirmedSlot.deposit_amount,
+      manageUrl: this.buildManageUrl(confirmedSlot.barber.slug),
+    };
+
+    const emailResult = confirmationClaim.count === 0
+      ? { clientEmailSent: false, barberEmailSent: false, mode: 'CONSOLE_FALLBACK' as const }
+      : await this.mailService.sendAppointmentConfirmationEmails({
         slotId: confirmedSlot.id,
         shopName: confirmedSlot.barber.shop_name,
         barberName: confirmedSlot.barber.user.name,
@@ -786,7 +806,21 @@ export class PaymentsService {
         : null,
       email_notified: emailResult.clientEmailSent,
       email_mode: emailResult.mode,
+      whatsapp_barber_notify_url: buildBarberNotificationWhatsAppUrl(whatsappContext),
     };
+  }
+
+  /** URL pública donde el cliente vuelve a la barbería (gestión / nueva reserva). */
+  buildManageUrl(barberSlug: string): string {
+    const base = (
+      this.configService.get<string>('FRONTEND_URL') ||
+      this.configService.get<string>('PUBLIC_APP_URL') ||
+      'http://localhost:5173'
+    )
+      .split(',')[0]
+      .trim()
+      .replace(/\/+$/, '');
+    return `${base}/${encodeURIComponent(barberSlug)}`;
   }
 
   /**
@@ -894,7 +928,9 @@ export class PaymentsService {
         client_id: payerClientId,
         mp_payment_id: mpPaymentId,
         locked_until: null,
-        lock_token_hash: null,
+        // El titular conserva su lockToken como credencial del turno (p. ej. suscribir Web Push).
+        // Si el turno se reasigna a otro pagador, el token del bloqueo anterior deja de valer.
+        ...(slot.client_id === payerClientId ? {} : { lock_token_hash: null }),
         deposit_amount: PLATFORM_DEPOSIT_ARS,
       },
     });

@@ -5,6 +5,7 @@ import { AdminModule } from './admin/admin.module';
 import { AppointmentsModule } from './appointments/appointments.module';
 import { AuthModule } from './auth/auth.module';
 import { MailModule } from './mail/mail.module';
+import { NotificationsModule } from './notifications/notifications.module';
 import { PaymentsModule } from './payments/payments.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RemindersModule } from './reminders/reminders.module';
@@ -25,6 +26,7 @@ import { SecurityModule } from './security/security.module';
     AppointmentsModule,
     PaymentsModule,
     RemindersModule,
+    NotificationsModule,
   ],
 })
 export class AppModule {}

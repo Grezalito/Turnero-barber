@@ -37,6 +37,8 @@ export interface AppointmentSlot {
   deposit_amount: number;
   mp_payment_id?: string | null;
   mp_preference_id?: string | null;
+  /** Link wa.me al cliente con la confirmación prearmada (lo genera el backend para el barbero). */
+  whatsapp_confirmation_url?: string | null;
   client?: {
     id: string;
     dni: string;
@@ -93,6 +95,8 @@ export interface WebhookSimulationResponse {
   email_notified?: boolean;
   email_mode?: 'SMTP' | 'CONSOLE_FALLBACK';
   reason?: string;
+  /** Link wa.me al barbero con el detalle del turno (cliente, teléfono, servicio, seña). */
+  whatsapp_barber_notify_url?: string | null;
 }
 
 export interface WeeklyGoalMetrics {

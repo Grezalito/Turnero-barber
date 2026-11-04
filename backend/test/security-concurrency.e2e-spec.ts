@@ -22,6 +22,10 @@ process.env.JWT_SECRET = 'e2e-only-jwt-secret-0123456789-abcdefghijklmnop';
 process.env.MP_WEBHOOK_SECRET = 'e2e-webhook-secret-123';
 process.env.MP_ACCESS_TOKEN = 'TEST-e2e-fake-token-not-real';
 process.env.SMTP_HOST = '';
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const e2eVapid = require('web-push').generateVAPIDKeys();
+process.env.VAPID_PUBLIC_KEY = e2eVapid.publicKey;
+process.env.VAPID_PRIVATE_KEY = e2eVapid.privateKey;
 
 import { spawnSync } from 'child_process';
 import * as crypto from 'crypto';
@@ -38,6 +42,9 @@ import { hashLockToken } from '../src/appointments/lock-token.util';
 import { MailService } from '../src/mail/mail.service';
 import { MercadoPagoService } from '../src/payments/mercadopago.service';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { ReminderSchedulerService } from '../src/notifications/reminder-scheduler.service';
+import { instantToNominal } from '../src/notifications/slot-time.util';
+import { WebPushService } from '../src/notifications/web-push.service';
 
 const WEBHOOK_SECRET = process.env.MP_WEBHOOK_SECRET!;
 const JWT_SECRET = process.env.JWT_SECRET!;
@@ -191,7 +198,7 @@ beforeAll(async () => {
   jest.spyOn(mp, 'getPayment').mockResolvedValue({ status: 'rejected' } as any);
 
   await prisma.$executeRawUnsafe(
-    'TRUNCATE orphan_payments, reminder_queue, appointment_slots, weekly_settlements, barber_profiles, users CASCADE',
+    'TRUNCATE push_subscriptions, orphan_payments, reminder_queue, appointment_slots, weekly_settlements, barber_profiles, users CASCADE',
   );
   const bcrypt = await import('bcrypt');
   const pw = await bcrypt.hash(PW, 4);
@@ -649,5 +656,126 @@ describe('3. Autenticación y RBAC', () => {
     await prisma.user.update({ where: { id: demoted.id }, data: { role: 'CLIENT' } });
     const afterDemotion = await get('/admin/barbers', t);
     check(A, 'Rol escalado / degradado', escalated.status === 401 && afterDemotion.status === 401, `escalado ${escalated.status}, degradado ${afterDemotion.status}`);
+  });
+});
+
+// ───────────────────────── 4. NOTIFICACIONES / PWA ─────────────────────────
+describe('4. Notificaciones, recordatorios y Web Push', () => {
+  const A = '4. Notificaciones';
+  const FCM = 'https://fcm.googleapis.com/fcm/send/e2e-device-';
+  const keys = { p256dh: 'BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM', auth: 'tBHItJI5svbpez7KI4CCXg' };
+  const subscribe = (slotId: string, lockToken: string, endpoint = `${FCM}${crypto.randomUUID()}`) =>
+    http('POST', '/notifications/subscribe', {
+      body: { slot_id: slotId, lock_token: lockToken, subscription: { endpoint, expirationTime: null, keys } },
+    });
+
+  test('flujo completo: lock → pago → confirmación → suscripción push del titular', async () => {
+    const slot = await mkSlot();
+    const lock = await http('POST', `/appointments/${slot.id}/lock`, { body: { dni: clientA.dni, password: PW } });
+    const token: string = lock.body.lock_token;
+    jest.spyOn(mp, 'getPayment').mockImplementation(approvedPayment(slot.id, clientA.id));
+    await webhook('8880001');
+    await sleep(2000);
+    const confirmed = await getSlot(slot.id);
+
+    const vapid = await http('GET', '/notifications/vapid-public-key');
+    const ok = await subscribe(slot.id, token);
+    const again = await subscribe(slot.id, token, `${FCM}fixed`);
+    const dup = await subscribe(slot.id, token, `${FCM}fixed`);
+    const stored = await prisma.pushSubscription.count({ where: { slot_id: slot.id } });
+
+    check(A, 'Confirmación marca confirmation_sent_at', confirmed.status === 'CONFIRMED' && confirmed.confirmation_sent_at !== null, `estado=${confirmed.status}, confirmation_sent_at=${!!confirmed.confirmation_sent_at}`);
+    check(A, 'Clave VAPID pública expuesta', vapid.status === 200 && vapid.body.enabled === true && vapid.body.public_key === e2eVapid.publicKey, `HTTP ${vapid.status}`);
+    check(A, 'Suscripción push del titular (upsert por dispositivo)', ok.status === 201 && again.status === 201 && dup.status === 201 && stored === 2, `HTTP ${ok.status}/${again.status}/${dup.status}, guardadas=${stored}`);
+  });
+
+  test('suscripción push: token ajeno / endpoint no permitido (SSRF) / turno de otro', async () => {
+    const slot = await mkSlot();
+    const lock = await http('POST', `/appointments/${slot.id}/lock`, { body: { dni: clientB.dni, password: PW } });
+    const otherSlot = await mkSlot();
+    const otherLock = await http('POST', `/appointments/${otherSlot.id}/lock`, { body: { dni: clientA.dni, password: PW } });
+
+    const forged = await subscribe(slot.id, crypto.randomBytes(32).toString('base64url'));
+    const crossSlot = await subscribe(slot.id, otherLock.body.lock_token);
+    const ssrf = await subscribe(slot.id, lock.body.lock_token, 'https://169.254.169.254/latest/meta-data');
+    const httpEndpoint = await subscribe(slot.id, lock.body.lock_token, 'http://fcm.googleapis.com/fcm/send/x');
+    const stored = await prisma.pushSubscription.count({ where: { slot_id: slot.id } });
+
+    check(
+      A,
+      'Suscripción push rechazada sin titularidad / endpoint inseguro',
+      forged.status === 403 && crossSlot.status === 403 && ssrf.status === 400 && httpEndpoint.status === 400 && stored === 0,
+      `token falso ${forged.status}, token de otro turno ${crossSlot.status}, SSRF ${ssrf.status}, http ${httpEndpoint.status}, guardadas=${stored}`,
+    );
+  });
+
+  test('link de WhatsApp al barbero en la confirmación y al cliente en la agenda del barbero', async () => {
+    const slot = await mkSlot({ status: 'PENDING_PAYMENT', client_id: clientB.id, locked_until: new Date(Date.now() + 600_000) });
+    const sim = await http('POST', '/payments/simulate-webhook', {
+      body: { type: 'payment', payment_id: `mp_pay_${Date.now()}`, external_reference: slot.id, status: 'approved' },
+    });
+    const barberToken = jwtService.sign({ sub: barberUser.id, dni: barberUser.dni, role: 'BARBER' });
+    const agenda = await http('GET', '/appointments/barber/slots', { headers: { authorization: `Bearer ${barberToken}` } });
+    const row = agenda.body?.slots?.find((x: any) => x.id === slot.id);
+    const barberUrl: string = sim.body?.whatsapp_barber_notify_url || '';
+    const clientUrl: string = row?.whatsapp_confirmation_url || '';
+
+    check(
+      A,
+      'Links wa.me (barbero y cliente)',
+      barberUrl.startsWith('https://wa.me/5491190000002?text=') &&
+        decodeURIComponent(barberUrl).includes('Cliente: E2E Client B') &&
+        clientUrl.startsWith('https://wa.me/5491190000004?text=') &&
+        decodeURIComponent(clientUrl).includes('¡Hola E2E Client B! Ya tenés confirmada tu seña') &&
+        !('lock_token_hash' in (row || {})),
+      `barbero=${barberUrl.slice(0, 32)}…, cliente=${clientUrl.slice(0, 32)}…, hash expuesto=${'lock_token_hash' in (row || {})}`,
+    );
+  });
+
+  test('cron de recordatorios: ventanas, estados e idempotencia con dos instancias concurrentes', async () => {
+    await prisma.appointmentSlot.updateMany({ data: { reminder_24h_sent_at: new Date(), reminder_2h_sent_at: new Date() } });
+    const now = new Date();
+    const nominalIn = (ms: number) => instantToNominal(new Date(now.getTime() + ms));
+    const mk = async (ms: number, status: any) => {
+      const start = nominalIn(ms);
+      return prisma.appointmentSlot.create({
+        data: { barber_id: barber.id, start_time: start, end_time: new Date(start.getTime() + 30 * 60_000), status, client_id: clientA.id },
+      });
+    };
+    const in24 = await mk(24 * 3_600_000, 'CONFIRMED');
+    const in2 = await mk(2 * 3_600_000, 'CONFIRMED');
+    const cancelled = await mk(2 * 3_600_000 + 10 * 60_000, 'CANCELLED');
+    const pending = await mk(24 * 3_600_000 + 10 * 60_000, 'PENDING_PAYMENT');
+    const outside = await mk(5 * 3_600_000, 'CONFIRMED');
+
+    const sends: string[] = [];
+    const push = app.get(WebPushService);
+    const spy = jest.spyOn(push, 'sendToSlot').mockImplementation(async (slotId: string) => {
+      sends.push(slotId);
+      await sleep(50);
+      return 1;
+    });
+    const scheduler = app.get(ReminderSchedulerService);
+
+    await Promise.all([scheduler.runOnce(now), scheduler.runOnce(now)]);
+    await scheduler.runOnce(new Date(now.getTime() + 10 * 60_000));
+    spy.mockRestore();
+
+    const [s24, s2, sc, sp, so] = await Promise.all([in24, in2, cancelled, pending, outside].map((x) => getSlot(x.id)));
+    const count = (id: string) => sends.filter((x) => x === id).length;
+
+    check(
+      A,
+      'Cron: 1 envío por ventana pese a 2 instancias + corrida siguiente',
+      count(in24.id) === 1 && count(in2.id) === 1 && s24.reminder_24h_sent_at !== null && s24.reminder_2h_sent_at === null && s2.reminder_2h_sent_at !== null,
+      `24h=${count(in24.id)} envío(s), 2h=${count(in2.id)} envío(s)`,
+    );
+    check(
+      A,
+      'Cron: ignora cancelados, pendientes y fuera de ventana',
+      count(cancelled.id) === 0 && count(pending.id) === 0 && count(outside.id) === 0 &&
+        sc.reminder_2h_sent_at === null && sp.reminder_24h_sent_at === null && so.reminder_2h_sent_at === null,
+      `cancelado=${count(cancelled.id)}, pendiente=${count(pending.id)}, fuera=${count(outside.id)}`,
+    );
   });
 });

@@ -332,7 +332,8 @@ export const api = {
         body: JSON.stringify({ ...payload, ...(lockToken ? { lock_token: lockToken } : {}) }),
       },
     );
-    if (res.released || (res.processed && res.status === 'CONFIRMED')) {
+    // Tras confirmar se conserva el token: es la credencial del turno para activar recordatorios push.
+    if (res.released) {
       clearLockToken(slotId);
     }
     return res;
@@ -354,6 +355,30 @@ export const api = {
     );
     clearLockToken(slotId);
     return res;
+  },
+
+  async getVapidPublicKey(): Promise<{ enabled: boolean; public_key: string | null }> {
+    return request<{ enabled: boolean; public_key: string | null }>(
+      '/notifications/vapid-public-key',
+      { skipAuth: true },
+    );
+  },
+
+  async subscribePush(payload: {
+    slotId: string;
+    lockToken: string;
+    subscription: PushSubscriptionJSON;
+  }): Promise<{ subscribed: boolean; slot_id: string }> {
+    const { endpoint, keys, expirationTime } = payload.subscription;
+    return request<{ subscribed: boolean; slot_id: string }>('/notifications/subscribe', {
+      method: 'POST',
+      skipAuth: true,
+      body: JSON.stringify({
+        slot_id: payload.slotId,
+        lock_token: payload.lockToken,
+        subscription: { endpoint, expirationTime: expirationTime ?? null, keys },
+      }),
+    });
   },
 
   async getClientSlots(): Promise<{ slots: ClientAppointmentSlot[] }> {

@@ -23,6 +23,7 @@ import {
   maskFullNameForPublicArtifact,
   sanitizeControlChars,
 } from '../security/pii-sanitizer.util';
+import { buildClientConfirmationWhatsAppUrl } from '../notifications/whatsapp-link.util';
 import { LockSlotDto } from './dto/lock-slot.dto';
 import {
   generateLockToken,
@@ -273,6 +274,7 @@ export class AppointmentsService {
   async getBarberSlots(userId: string) {
     const barber = await this.prisma.barberProfile.findUnique({
       where: { user_id: userId },
+      include: { user: { select: { name: true, phone: true } } },
     });
 
     if (!barber) {
@@ -310,7 +312,24 @@ export class AppointmentsService {
         reminder_addon_active: barber.reminder_addon_active,
       },
       weekly_goal: calculateWeeklyGoalMetrics(weeklyConfirmedCount),
-      slots,
+      slots: slots.map(({ lock_token_hash: _omit, ...slot }) => ({
+        ...slot,
+        // Link wa.me al cliente con la confirmación prearmada (solo turnos confirmados con teléfono válido).
+        whatsapp_confirmation_url:
+          slot.status === SlotStatus.CONFIRMED && slot.client
+            ? buildClientConfirmationWhatsAppUrl({
+                clientName: slot.client.name,
+                clientPhone: slot.client.phone,
+                barberName: barber.user.name,
+                barberPhone: barber.user.phone,
+                shopName: barber.shop_name,
+                startTime: slot.start_time,
+                endTime: slot.end_time,
+                depositAmountArs: slot.deposit_amount,
+                manageUrl: this.paymentsService.buildManageUrl(barber.slug),
+              })
+            : null,
+      })),
     };
   }
 

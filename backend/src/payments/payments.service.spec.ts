@@ -70,6 +70,14 @@ describe('PaymentsService - Idempotencia de Webhooks', () => {
         }),
         findUniqueOrThrow: jest.fn(async () => slotInDb),
         updateMany: jest.fn(async ({ where, data }: any) => {
+          // Reclamo atómico de la confirmación (confirmation_sent_at IS NULL)
+          if ('confirmation_sent_at' in where) {
+            if (where.id === mockSlotId && slotInDb.confirmation_sent_at == null) {
+              slotInDb = { ...slotInDb, ...data };
+              return { count: 1 };
+            }
+            return { count: 0 };
+          }
           if (
             where.id === mockSlotId &&
             where.status === slotInDb.status &&

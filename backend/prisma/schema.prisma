@@ -34,17 +34,18 @@ enum ReminderStatus {
 }
 
 model User {
-  id             String            @id @default(uuid())
-  dni            String            @unique
-  password       String
-  name           String
-  phone          String
-  email          String?
-  role           Role              @default(CLIENT)
-  barber_profile BarberProfile?
-  appointments   AppointmentSlot[] @relation("ClientAppointments")
-  created_at     DateTime          @default(now())
-  updated_at     DateTime          @updatedAt
+  id                 String             @id @default(uuid())
+  dni                String             @unique
+  password           String
+  name               String
+  phone              String
+  email              String?
+  role               Role               @default(CLIENT)
+  barber_profile     BarberProfile?
+  appointments       AppointmentSlot[]  @relation("ClientAppointments")
+  push_subscriptions PushSubscription[]
+  created_at         DateTime           @default(now())
+  updated_at         DateTime           @updatedAt
 
   @@map("users")
 }
@@ -87,26 +88,32 @@ model WeeklySettlement {
 }
 
 model AppointmentSlot {
-  id               String          @id @default(uuid())
-  barber_id        String
-  barber           BarberProfile   @relation(fields: [barber_id], references: [id], onDelete: Cascade)
-  client_id        String?
-  client           User?           @relation("ClientAppointments", fields: [client_id], references: [id], onDelete: SetNull)
-  start_time       DateTime
-  end_time         DateTime
-  status           SlotStatus      @default(AVAILABLE)
-  locked_until     DateTime?
-  deposit_amount   Int             @default(2000)
-  mp_payment_id    String?         @unique
-  mp_preference_id String?
+  id                   String             @id @default(uuid())
+  barber_id            String
+  barber               BarberProfile      @relation(fields: [barber_id], references: [id], onDelete: Cascade)
+  client_id            String?
+  client               User?              @relation("ClientAppointments", fields: [client_id], references: [id], onDelete: SetNull)
+  start_time           DateTime
+  end_time             DateTime
+  status               SlotStatus         @default(AVAILABLE)
+  locked_until         DateTime?
+  deposit_amount       Int                @default(2000)
+  mp_payment_id        String?            @unique
+  mp_preference_id     String?
   /// SHA-256 (hex) del lockToken entregado al cliente al bloquear el turno. Nunca se guarda el token en claro.
-  lock_token_hash  String?
-  reminders        ReminderQueue[]
-  created_at       DateTime        @default(now())
-  updated_at       DateTime        @updatedAt
+  lock_token_hash      String?
+  /// Tracking de notificaciones: se "reclaman" atómicamente antes de enviar (anti-duplicados).
+  confirmation_sent_at DateTime?
+  reminder_24h_sent_at DateTime?
+  reminder_2h_sent_at  DateTime?
+  reminders            ReminderQueue[]
+  push_subscriptions   PushSubscription[]
+  created_at           DateTime           @default(now())
+  updated_at           DateTime           @updatedAt
 
   @@unique([barber_id, start_time])
   @@index([status, locked_until])
+  @@index([status, start_time])
   @@map("appointment_slots")
 }
 
@@ -143,4 +150,24 @@ model OrphanPayment {
 
   @@index([status])
   @@map("orphan_payments")
+}
+
+/// Suscripción Web Push (PWA) de un dispositivo para recibir recordatorios de un turno.
+model PushSubscription {
+  id           String          @id @default(uuid())
+  slot_id      String
+  slot         AppointmentSlot @relation(fields: [slot_id], references: [id], onDelete: Cascade)
+  client_id    String?
+  client       User?           @relation(fields: [client_id], references: [id], onDelete: SetNull)
+  endpoint     String
+  p256dh       String
+  auth         String
+  user_agent   String?
+  last_sent_at DateTime?
+  created_at   DateTime        @default(now())
+  updated_at   DateTime        @updatedAt
+
+  @@unique([slot_id, endpoint])
+  @@index([client_id])
+  @@map("push_subscriptions")
 }

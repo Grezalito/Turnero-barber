@@ -18,6 +18,7 @@ import {
   LockSlotResponse,
   PublicBarberScheduleResponse,
 } from '../types/api';
+import { PushReminderOptIn } from './PushReminderOptIn';
 import {
   buildGoogleCalendarUrl,
   buildWhatsAppShareUrl,
@@ -60,6 +61,7 @@ interface PublicBookingViewProps {
     reminderEnqueued: boolean;
     reminderMessage?: string | null;
     emailMode?: string;
+    whatsappBarberNotifyUrl?: string | null;
   } | null;
   isLocking: boolean;
 }
@@ -348,15 +350,19 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
               mpPaymentId: confirmedSlotInfo.mpPaymentId,
               depositAmountArs: 2000,
             });
-            const waUrl = buildWhatsAppShareUrl({
-              barberPhone:
-                confirmedSlotInfo.barberPhone || schedule.barber.barber_phone,
-              startTimeIso: startIso,
-              mpPaymentId: confirmedSlotInfo.mpPaymentId,
-            });
+            // El backend arma el aviso completo (cliente, teléfono, servicio, seña); el builder local es fallback.
+            const waUrl =
+              confirmedSlotInfo.whatsappBarberNotifyUrl ||
+              buildWhatsAppShareUrl({
+                barberPhone:
+                  confirmedSlotInfo.barberPhone || schedule.barber.barber_phone,
+                startTimeIso: startIso,
+                mpPaymentId: confirmedSlotInfo.mpPaymentId,
+              });
 
             return (
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <div className="space-y-2">
+              <div className={`grid grid-cols-1 gap-2 ${waUrl ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`}>
                 <a
                   href={gcalUrl}
                   target="_blank"
@@ -386,15 +392,19 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
                   <span>Descargar .ICS</span>
                 </button>
 
-                <a
-                  href={waUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="min-h-[44px] px-3 rounded-lg bg-[#090D16] border border-[#1E293B] hover:border-[#334155] text-[#F8FAFC] text-xs font-medium flex items-center justify-center gap-1.5 transition-colors"
-                >
-                  <MessageCircle className="w-4 h-4 text-[#3B82F6] shrink-0" />
-                  <span>Avisar por WhatsApp</span>
-                </a>
+                {waUrl && (
+                  <a
+                    href={waUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="min-h-[44px] px-3 rounded-lg bg-[#090D16] border border-[#1E293B] hover:border-[#334155] text-[#F8FAFC] text-xs font-medium flex items-center justify-center gap-1.5 transition-colors"
+                  >
+                    <MessageCircle className="w-4 h-4 text-[#3B82F6] shrink-0" />
+                    <span>Avisar al barbero por WhatsApp</span>
+                  </a>
+                )}
+              </div>
+              <PushReminderOptIn slotId={confirmedSlotInfo.slotId} />
               </div>
             );
           })()}

@@ -27,6 +27,7 @@ import {
   calculateWeeklyGoalMetrics,
   getArgentinaDateIso,
   getWeekBoundsUtc,
+  normalizeArgentinaWhatsAppNumber,
 } from '../utils/postBookingAndGamification';
 import { formatDateHeader, formatTime30m } from './PublicBookingView';
 
@@ -102,12 +103,13 @@ function buildClientWhatsAppUrl(params: {
   clientName?: string | null;
   shopName: string;
   startTimeIso: string;
-}): string {
-  const cleanPhone = (params.phone || '5491155667788').replace(/\D/g, '');
+}): string | null {
+  const phone = normalizeArgentinaWhatsAppNumber(params.phone);
+  if (!phone) return null;
   const timeStr = formatTime30m(params.startTimeIso);
   const name = params.clientName || 'Hola';
   const msg = `¡Hola ${name}! Te escribimos de ${params.shopName} por tu turno reservado a las ${timeStr} hs.`;
-  return `https://wa.me/${cleanPhone}?text=${encodeURIComponent(msg)}`;
+  return `https://wa.me/${phone}?text=${encodeURIComponent(msg)}`;
 }
 
 export const BarberDashboardView: React.FC<BarberDashboardViewProps> = ({
@@ -710,15 +712,18 @@ export const BarberDashboardView: React.FC<BarberDashboardViewProps> = ({
               const isConfirmed = slot.status === 'CONFIRMED';
               const isPending = slot.status === 'PENDING_PAYMENT';
               const clientName = slot.client?.name || 'Cliente reservado';
-              const clientPhone = slot.client?.phone || '+54 9 11 5566-7788';
+              const clientPhone = slot.client?.phone || null;
               const clientDni = slot.client?.dni;
 
-              const waLink = buildClientWhatsAppUrl({
-                phone: clientPhone,
-                clientName,
-                shopName: barberInfo.shop_name,
-                startTimeIso: slot.start_time,
-              });
+              // Confirmados: copy oficial generado por el backend. Pendientes: mensaje local.
+              const waLink =
+                slot.whatsapp_confirmation_url ||
+                buildClientWhatsAppUrl({
+                  phone: clientPhone,
+                  clientName,
+                  shopName: barberInfo.shop_name,
+                  startTimeIso: slot.start_time,
+                });
 
               return (
                 <article
@@ -784,7 +789,7 @@ export const BarberDashboardView: React.FC<BarberDashboardViewProps> = ({
 
                           <div className="flex items-center gap-2 text-xs text-[#94A3B8]">
                             <Phone className="w-3.5 h-3.5 shrink-0" />
-                            <span>{clientPhone}</span>
+                            <span>{clientPhone || 'Sin teléfono'}</span>
                             <span className="text-[#F8FAFC] font-medium">
                               · Seña $2.000
                             </span>
@@ -797,7 +802,7 @@ export const BarberDashboardView: React.FC<BarberDashboardViewProps> = ({
                       )}
                     </div>
 
-                    {isConfirmed || isPending ? (
+                    {(isConfirmed || isPending) && waLink ? (
                       <a
                         href={waLink}
                         target="_blank"

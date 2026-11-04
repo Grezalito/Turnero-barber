@@ -6,6 +6,23 @@ import {
   maskEmail,
   sanitizeControlChars,
 } from '../security/pii-sanitizer.util';
+import {
+  formatSlotDateAr,
+  formatSlotTimeAr,
+  nominalToInstant,
+  slotDurationMinutes,
+} from '../notifications/slot-time.util';
+
+export interface ReminderEmailPayload {
+  to: string;
+  clientName: string;
+  shopName: string;
+  barberName: string;
+  address?: string | null;
+  startTime: Date;
+  endTime: Date;
+  kind: '24h' | '2h';
+}
 
 export interface IcsAppointmentPayload {
   slotId: string;
@@ -64,59 +81,82 @@ export class MailService {
   }
 
   /**
-   * Convierte el horario nominal del turno (almacenado en HH:mm UTC nominal para Argentina UTC-3)
-   * al instante real UTC (+3 horas) para que Google Calendar, Apple Calendar y Outlook en Argentina
-   * agenden el evento en la hora local exacta.
+   * Convierte el horario nominal del turno (hora de pared de Argentina guardada como UTC)
+   * al instante real en UTC (`Z`). Usar UTC explícito en DTSTART/DTEND evita depender de
+   * VTIMEZONE: Apple Calendar, Google y Outlook lo muestran en la zona del dispositivo sin desfase.
    */
   formatArgentinaSlotToUtcIcsDate(nominalDate: Date): string {
-    const realUtcDate = new Date(nominalDate.getTime() + 3 * 60 * 60 * 1000);
-    return this.formatIcsUtcDate(realUtcDate);
+    return this.formatIcsUtcDate(nominalToInstant(nominalDate));
   }
 
   /**
-   * Genera contenido .ICS compatible con Apple Calendar, Outlook y Google Calendar
-   * para el turno estricto de 30 minutos.
+   * Genera un .ICS (RFC 5545) compatible con Apple Calendar, Outlook y Google Calendar.
+   * DTEND respeta la duración real del turno (end_time - start_time).
    */
   buildIcsCalendar(payload: IcsAppointmentPayload): string {
     const nowUtc = this.formatIcsUtcDate(new Date());
     const startUtc = this.formatArgentinaSlotToUtcIcsDate(payload.startTime);
     const endUtc = this.formatArgentinaSlotToUtcIcsDate(payload.endTime);
+    const minutes = slotDurationMinutes(payload.startTime, payload.endTime);
     const location = payload.address || payload.shopName;
-    const summary = `Corte de Barbería (30 min) - ${payload.shopName}`;
+    const summary = `Corte de Barbería (${minutes} min) - ${payload.shopName}`;
     const descriptionLines = [
       `Reserva confirmada en ${payload.shopName}`,
       `Barbero: ${payload.barberName}`,
-      `Cliente: ${payload.clientName} (DNI ${payload.clientDni})`,
+      `Cliente: ${payload.clientName} (DNI ${maskDni(payload.clientDni)})`,
       `Seña acreditada: $${payload.depositAmountArs.toLocaleString('es-AR')} ARS`,
       `Comprobante Mercado Pago: ${payload.mpPaymentId}`,
-      `Política: Reserva garantizada: la seña de $2.000 ARS no es reembolsable ni transferible ante cancelaciones o inasistencias.`,
+      `Política: la seña no es reembolsable ni transferible ante cancelaciones o inasistencias.`,
     ];
 
     const lines = [
       'BEGIN:VCALENDAR',
       'VERSION:2.0',
-      'PRODID:-//Turnero Barber Craft//Booking Engine 30m//ES',
+      'PRODID:-//Turnazo//Booking Engine//ES',
       'CALSCALE:GREGORIAN',
       'METHOD:PUBLISH',
       'BEGIN:VEVENT',
-      `UID:slot-${payload.slotId}@turnero-barber.local`,
+      `UID:slot-${payload.slotId}@turnazo.app`,
       `DTSTAMP:${nowUtc}`,
       `DTSTART:${startUtc}`,
       `DTEND:${endUtc}`,
       `SUMMARY:${this.escapeIcsText(summary)}`,
       `LOCATION:${this.escapeIcsText(location)}`,
-      `DESCRIPTION:${this.escapeIcsText(descriptionLines.join('\\n'))}`,
+      // Cada línea se escapa por separado y recién después se une con el salto de línea ICS (\n).
+      `DESCRIPTION:${descriptionLines.map((l) => this.escapeIcsText(l)).join('\\n')}`,
       'STATUS:CONFIRMED',
       'BEGIN:VALARM',
-      'TRIGGER:-PT30M',
+      'TRIGGER:-PT2H',
       'ACTION:DISPLAY',
-      'DESCRIPTION:Recordatorio de tu turno en 30 minutos',
+      `DESCRIPTION:${this.escapeIcsText(`Tu turno en ${payload.shopName} es en 2 horas`)}`,
       'END:VALARM',
       'END:VEVENT',
       'END:VCALENDAR',
     ];
 
-    return lines.join('\r\n');
+    return lines.map((line) => this.foldIcsLine(line)).join('\r\n') + '\r\n';
+  }
+
+  /** RFC 5545 §3.1: líneas de máx. 75 octetos; las continuaciones empiezan con un espacio. */
+  private foldIcsLine(line: string): string {
+    const bytes = Buffer.from(line, 'utf8');
+    if (bytes.length <= 75) return line;
+    const chunks: string[] = [];
+    let current = '';
+    let currentBytes = 0;
+    for (const char of line) {
+      const charBytes = Buffer.byteLength(char, 'utf8');
+      const limit = chunks.length === 0 ? 75 : 74; // la continuación ya usa 1 octeto en el espacio
+      if (currentBytes + charBytes > limit) {
+        chunks.push(current);
+        current = '';
+        currentBytes = 0;
+      }
+      current += char;
+      currentBytes += charBytes;
+    }
+    chunks.push(current);
+    return chunks.join('\r\n ');
   }
 
   /**
@@ -131,22 +171,22 @@ export class MailService {
     mode: 'SMTP' | 'CONSOLE_FALLBACK';
   }> {
     const icsContent = this.buildIcsCalendar(payload);
-    const dateStr = payload.startTime.toISOString().slice(0, 10);
-    const startHhMm = payload.startTime.toISOString().slice(11, 16);
-    const endHhMm = payload.endTime.toISOString().slice(11, 16);
+    const dateStr = formatSlotDateAr(payload.startTime);
+    const startHhMm = formatSlotTimeAr(payload.startTime);
+    const endHhMm = formatSlotTimeAr(payload.endTime);
+    const minutes = slotDurationMinutes(payload.startTime, payload.endTime);
 
-    const clientRecipient =
-      payload.clientEmail || `cliente.${payload.clientDni}@turnero-barber.local`;
-    const barberRecipient =
-      payload.barberEmail || `barbero.${payload.shopName.toLowerCase().replace(/[^a-z0-9]/g, '')}@turnero-barber.local`;
+    // Nunca inventar destinatarios: sin email real no se envía (antes se usaba cliente.<DNI>@...local).
+    const clientRecipient = payload.clientEmail?.trim() || null;
+    const barberRecipient = payload.barberEmail?.trim() || null;
 
     const clientSubject = `✓ Turno Confirmado (${dateStr} ${startHhMm} hs) - ${payload.shopName}`;
     const clientText = [
-      `Hola ${payload.clientName} (DNI ${payload.clientDni}),`,
+      `Hola ${payload.clientName},`,
       ``,
-      `Tu turno de 30 minutos en ${payload.shopName} fue CONFIRMADO.`,
+      `Tu turno de ${minutes} minutos en ${payload.shopName} fue CONFIRMADO.`,
       `- Fecha: ${dateStr}`,
-      `- Horario UTC: ${startHhMm} a ${endHhMm} hs (30 min)`,
+      `- Horario: ${startHhMm} a ${endHhMm} hs (hora de Argentina)`,
       `- Barbero: ${payload.barberName}`,
       `- Dirección: ${payload.address || 'Consultar con la barbería'}`,
       `- Seña acreditada: $${payload.depositAmountArs} ARS`,
@@ -157,11 +197,11 @@ export class MailService {
       `Adjuntamos el archivo .ics para agregar el evento a tu Apple Calendar, Outlook o Google Calendar.`,
     ].join('\n');
 
-    const barberSubject = `Nuevo Turno Señado (${dateStr} ${startHhMm} hs) - Cliente DNI ${payload.clientDni}`;
+    const barberSubject = `Nuevo Turno Señado (${dateStr} ${startHhMm} hs) - ${payload.clientName}`;
     const barberText = [
       `Hola ${payload.barberName},`,
       ``,
-      `Tenés un nuevo turno CONFIRMADO de 30 minutos en ${payload.shopName}:`,
+      `Tenés un nuevo turno CONFIRMADO de ${minutes} minutos en ${payload.shopName}:`,
       `- Fecha: ${dateStr}`,
       `- Horario: ${startHhMm} a ${endHhMm} hs`,
       `- Cliente: ${payload.clientName} (DNI ${payload.clientDni})`,
@@ -169,37 +209,41 @@ export class MailService {
     ].join('\n');
 
     if (this.isSmtpConfigured && this.transporter) {
+      let clientEmailSent = false;
+      let barberEmailSent = false;
       try {
-        await this.transporter.sendMail({
-          from: this.fromAddress,
-          to: clientRecipient,
-          subject: clientSubject,
-          text: clientText,
-          attachments: [
-            {
-              filename: `turno-${payload.slotId.slice(0, 8)}.ics`,
-              content: icsContent,
-              contentType: 'text/calendar; charset=utf-8; method=PUBLISH',
-            },
-          ],
-        });
+        if (clientRecipient) {
+          await this.transporter.sendMail({
+            from: this.fromAddress,
+            to: clientRecipient,
+            subject: clientSubject,
+            text: clientText,
+            attachments: [
+              {
+                filename: `turno-${payload.slotId.slice(0, 8)}.ics`,
+                content: icsContent,
+                contentType: 'text/calendar; charset=utf-8; method=PUBLISH',
+              },
+            ],
+          });
+          clientEmailSent = true;
+        }
 
-        await this.transporter.sendMail({
-          from: this.fromAddress,
-          to: barberRecipient,
-          subject: barberSubject,
-          text: barberText,
-        });
+        if (barberRecipient) {
+          await this.transporter.sendMail({
+            from: this.fromAddress,
+            to: barberRecipient,
+            subject: barberSubject,
+            text: barberText,
+          });
+          barberEmailSent = true;
+        }
 
         this.logger.log(
-          `📧 Emails SMTP enviados a cliente (${maskEmail(clientRecipient)}) con .ics adjunto y barbero (${maskEmail(barberRecipient)})`,
+          `📧 Confirmación SMTP: cliente=${clientRecipient ? maskEmail(clientRecipient) : 'sin email'} barbero=${barberRecipient ? maskEmail(barberRecipient) : 'sin email'}`,
         );
 
-        return {
-          clientEmailSent: true,
-          barberEmailSent: true,
-          mode: 'SMTP',
-        };
+        return { clientEmailSent, barberEmailSent, mode: 'SMTP' };
       } catch (err) {
         this.logger.warn(
           `Fallo envío SMTP (${(err as Error).message}), ejecutando fallback seguro`,
@@ -214,33 +258,73 @@ export class MailService {
     if (isProd) {
       // En producción, jamás volcar cuerpos de correo ni PII en texto plano a stdout (ISO 27701 / ISO 27001 A.8.15)
       this.logger.log(
-        `[SECURITY_AUDIT] event=MAIL_FALLBACK_REDACTED slotId=${payload.slotId} clientDni=${maskDni(payload.clientDni)} clientEmail=${maskEmail(clientRecipient)}`,
+        `[SECURITY_AUDIT] event=MAIL_FALLBACK_REDACTED slotId=${payload.slotId} clientDni=${maskDni(payload.clientDni)} clientEmail=${clientRecipient ? maskEmail(clientRecipient) : 'none'}`,
       );
     } else {
       // Fallback en desarrollo: console.log estructurado con DNI enmascarado
       console.log('\n============================================================');
       console.log('📧 [MailService Fallback - Desarrollo] COMPROBANTE AL CLIENTE');
-      console.log(`Para: ${maskEmail(clientRecipient)}`);
+      console.log(`Para: ${clientRecipient ? maskEmail(clientRecipient) : '(cliente sin email)'}`);
       console.log(`Asunto: ${clientSubject}`);
       console.log(`Adjunto: turno-${payload.slotId.slice(0, 8)}.ics (${icsContent.length} bytes)`);
       console.log('------------------------------------------------------------');
       console.log('📧 [MailService Fallback - Desarrollo] AVISO AL BARBERO');
-      console.log(`Para: ${maskEmail(barberRecipient)}`);
+      console.log(`Para: ${barberRecipient ? maskEmail(barberRecipient) : '(barbero sin email)'}`);
       console.log(`Asunto: Nuevo Turno Señado (${dateStr} ${startHhMm} hs) - Cliente DNI ${maskDni(payload.clientDni)}`);
       console.log('============================================================\n');
     }
 
     return {
-      clientEmailSent: true,
-      barberEmailSent: true,
+      clientEmailSent: false,
+      barberEmailSent: false,
       mode: 'CONSOLE_FALLBACK',
     };
+  }
+
+  /**
+   * Recordatorio 24 hs / 2 hs. `sent` es true solo si el SMTP aceptó el mensaje
+   * (o, fuera de producción, si se volcó al fallback de consola).
+   */
+  async sendAppointmentReminderEmail(
+    payload: ReminderEmailPayload,
+  ): Promise<{ sent: boolean; mode: 'SMTP' | 'CONSOLE_FALLBACK' | 'DISABLED' }> {
+    const when = payload.kind === '24h' ? 'mañana' : 'hoy';
+    const time = formatSlotTimeAr(payload.startTime);
+    const date = formatSlotDateAr(payload.startTime);
+    const subject = `Recordatorio: ${when} a las ${time} hs en ${payload.shopName}`;
+    const text = [
+      `Hola ${payload.clientName},`,
+      ``,
+      `Te recordamos tu turno ${when} (${date}) a las ${time} hs con ${payload.barberName} en ${payload.shopName}.`,
+      `Dirección: ${payload.address || 'Consultar con la barbería'}`,
+      ``,
+      `Recordá que la seña no es reembolsable ante inasistencias. ¡Te esperamos!`,
+    ].join('\n');
+
+    if (this.isSmtpConfigured && this.transporter) {
+      try {
+        await this.transporter.sendMail({ from: this.fromAddress, to: payload.to, subject, text });
+        return { sent: true, mode: 'SMTP' };
+      } catch (err) {
+        this.logger.warn(`Fallo SMTP en recordatorio (${maskEmail(payload.to)}): ${(err as Error).message}`);
+        return { sent: false, mode: 'SMTP' };
+      }
+    }
+
+    const isProd =
+      (this.configService.get<string>('NODE_ENV') || '').toLowerCase() === 'production';
+    if (isProd) {
+      return { sent: false, mode: 'DISABLED' };
+    }
+    console.log(`📧 [MailService Fallback - Desarrollo] RECORDATORIO ${payload.kind} → ${maskEmail(payload.to)} | ${subject}`);
+    return { sent: true, mode: 'CONSOLE_FALLBACK' };
   }
 
   private escapeIcsText(text: string): string {
     return sanitizeControlChars(text)
       .replace(/\\/g, '\\\\')
+      .replace(/;/g, '\\;')
       .replace(/,/g, '\\,')
-      .replace(/;/g, '\\;');
+      .replace(/\r?\n/g, '\\n');
   }
 }

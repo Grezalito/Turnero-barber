@@ -282,6 +282,7 @@ const AppContent: React.FC = () => {
     reminderEnqueued: boolean;
     reminderMessage?: string | null;
     emailMode?: string;
+    whatsappBarberNotifyUrl?: string | null;
   } | null>(null);
   const [isLocking, setIsLocking] = useState(false);
 
@@ -449,6 +450,7 @@ const AppContent: React.FC = () => {
             reminderEnqueued: Boolean(res.reminder_enqueued),
             reminderMessage: res.reminder_message || null,
             emailMode: res.email_mode,
+            whatsappBarberNotifyUrl: res.whatsapp_barber_notify_url,
           });
         } else if (
           normalizedStatus === 'rejected' ||
@@ -655,6 +657,7 @@ const AppContent: React.FC = () => {
         reminderEnqueued: Boolean(res.reminder_enqueued),
         reminderMessage: res.reminder_message || null,
         emailMode: res.email_mode,
+        whatsappBarberNotifyUrl: res.whatsapp_barber_notify_url,
       });
       await loadPublicSchedule(slug);
     } catch {
