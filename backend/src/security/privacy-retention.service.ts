@@ -1,11 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron } from '@nestjs/schedule';
-import { ReminderStatus, SlotStatus } from '@prisma/client';
+import { SlotStatus } from '@prisma/client';
+import { instantToNominal } from '../notifications/slot-time.util';
 import { PrismaService } from '../prisma/prisma.service';
 
 export const DEFAULT_PII_RETENTION_DAYS = 30;
-export const REDACTED_PHONE_MARKER = 'REDACTED_ISO27701';
 
 /**
  * Servicio Automatizado de Retención, Minimización de PII y Disponibilidad de Agenda
@@ -63,13 +63,13 @@ export class PrivacyRetentionService {
 
   /**
    * Ejecuta diariamente (04:00 UTC / 01:00 ART) la política de retención y minimización de PII (ISO 27701 7.4.7):
-   * - Anonimiza el teléfono y purga el contenido del mensaje en registros históricos de ReminderQueue (SENT, FAILED, CANCELLED)
-   *   anteriores a la ventana de retención (por defecto 30 días).
+   * - Elimina suscripciones Web Push (identificador de dispositivo) de turnos ya pasados o cancelados:
+   *   ya no hay recordatorios que enviarles.
    * - Limpia identificadores de preferencia transitoria en turnos CANCELLED antiguos.
    */
   @Cron('0 4 * * *')
   async enforcePiiRetentionPolicy(): Promise<{
-    anonymizedReminders: number;
+    purgedPushSubscriptions: number;
     scrubbedCancelledSlots: number;
     retentionDays: number;
   }> {
@@ -87,25 +87,13 @@ export class PrivacyRetentionService {
     );
 
     try {
-      const reminderUpdate = await this.prisma.reminderQueue.updateMany({
+      const pastNominal = new Date(instantToNominal(new Date()).getTime() - 24 * 60 * 60 * 1000);
+      const pushPurge = await this.prisma.pushSubscription.deleteMany({
         where: {
-          status: {
-            in: [
-              ReminderStatus.SENT,
-              ReminderStatus.FAILED,
-              ReminderStatus.CANCELLED,
-            ],
-          },
-          created_at: {
-            lt: cutoffDate,
-          },
-          client_phone: {
-            not: REDACTED_PHONE_MARKER,
-          },
-        },
-        data: {
-          client_phone: REDACTED_PHONE_MARKER,
-          generated_message: null,
+          OR: [
+            { slot: { start_time: { lt: pastNominal } } },
+            { slot: { status: { not: SlotStatus.CONFIRMED } }, created_at: { lt: pastNominal } },
+          ],
         },
       });
 
@@ -125,14 +113,14 @@ export class PrivacyRetentionService {
         },
       });
 
-      if (reminderUpdate.count > 0 || cancelledSlotsScrub.count > 0) {
+      if (pushPurge.count > 0 || cancelledSlotsScrub.count > 0) {
         this.logger.log(
-          `[SECURITY_AUDIT] event=ISO27701_PII_RETENTION_ENFORCED retentionDays=${retentionDays} anonymizedReminders=${reminderUpdate.count} scrubbedCancelledSlots=${cancelledSlotsScrub.count}`,
+          `[SECURITY_AUDIT] event=ISO27701_PII_RETENTION_ENFORCED retentionDays=${retentionDays} purgedPushSubscriptions=${pushPurge.count} scrubbedCancelledSlots=${cancelledSlotsScrub.count}`,
         );
       }
 
       return {
-        anonymizedReminders: reminderUpdate.count,
+        purgedPushSubscriptions: pushPurge.count,
         scrubbedCancelledSlots: cancelledSlotsScrub.count,
         retentionDays,
       };
@@ -141,7 +129,7 @@ export class PrivacyRetentionService {
         `No se pudo aplicar tarea programada de retención ISO 27701: ${(err as Error).message}`,
       );
       return {
-        anonymizedReminders: 0,
+        purgedPushSubscriptions: 0,
         scrubbedCancelledSlots: 0,
         retentionDays,
       };

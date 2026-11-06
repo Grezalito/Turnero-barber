@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import { LockSlotResponse, User } from '../types/api';
 import { NON_REFUNDABLE_LEGEND } from '../utils/postBookingAndGamification';
-import { formatTime30m } from './PublicBookingView';
+import { formatTime30m } from '../utils/slotFormat';
 
 interface SandboxCheckoutModalProps {
   isOpen: boolean;

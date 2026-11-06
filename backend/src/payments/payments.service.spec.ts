@@ -3,14 +3,13 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { SlotStatus } from '@prisma/client';
 import { MailService } from '../mail/mail.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { REMINDER_PROVIDER } from '../reminders/reminder.interface';
+import { BookingLinkService } from '../notifications/booking-link.service';
 import { MercadoPagoService } from './mercadopago.service';
 import { PaymentsService } from './payments.service';
 
 describe('PaymentsService - Idempotencia de Webhooks', () => {
   let service: PaymentsService;
   let prismaMock: any;
-  let reminderProviderMock: any;
   let mailServiceMock: any;
   let mercadoPagoServiceMock: any;
   let slotInDb: any;
@@ -48,7 +47,6 @@ describe('PaymentsService - Idempotencia de Webhooks', () => {
         phone: '+5491122222222',
         email: 'cliente@test.com',
       },
-      reminders: [],
     };
 
     slotInDb = { ...baseSlot };
@@ -103,13 +101,6 @@ describe('PaymentsService - Idempotencia de Webhooks', () => {
       }),
     };
 
-    reminderProviderMock = {
-      scheduleForConfirmedSlot: jest.fn().mockResolvedValue({
-        id: 'reminder-1',
-        generated_message: 'Hola, tu turno está confirmado',
-        scheduled_for: new Date('2026-11-04T12:00:00Z'),
-      }),
-    };
 
     mailServiceMock = {
       sendAppointmentConfirmationEmails: jest.fn().mockResolvedValue({
@@ -143,7 +134,13 @@ describe('PaymentsService - Idempotencia de Webhooks', () => {
         { provide: PrismaService, useValue: prismaMock },
         { provide: ConfigService, useValue: configServiceMock },
         { provide: MailService, useValue: mailServiceMock },
-        { provide: REMINDER_PROVIDER, useValue: reminderProviderMock },
+        {
+          provide: BookingLinkService,
+          useValue: {
+            url: (slot: any) => `https://turnazo.app/reserva/${slot.id}?ref=test`,
+            path: (slot: any) => `/reserva/${slot.id}?ref=test`,
+          },
+        },
         { provide: MercadoPagoService, useValue: mercadoPagoServiceMock },
       ],
     }).compile();
@@ -158,8 +155,9 @@ describe('PaymentsService - Idempotencia de Webhooks', () => {
     expect(firstResult.processed).toBe(true);
     expect(firstResult.status).toBe(SlotStatus.CONFIRMED);
     expect(firstResult.idempotent).toBeUndefined();
-    expect(reminderProviderMock.scheduleForConfirmedSlot).toHaveBeenCalledTimes(1);
     expect(mailServiceMock.sendAppointmentConfirmationEmails).toHaveBeenCalledTimes(1);
+    expect(slotInDb.confirmation_sent_at).toBeInstanceOf(Date);
+    expect(firstResult.booking_url).toBe(`https://turnazo.app/reserva/${mockSlotId}?ref=test`);
 
     // 2. Segunda notificación con el mismo paymentId: debe ser detectada como idempotente
     const secondResult = await service.processPaymentNotification(mockPaymentId);
@@ -169,7 +167,6 @@ describe('PaymentsService - Idempotencia de Webhooks', () => {
     expect(secondResult.status).toBe(SlotStatus.CONFIRMED);
 
     // Los efectos secundarios NO deben haberse llamado una segunda vez
-    expect(reminderProviderMock.scheduleForConfirmedSlot).toHaveBeenCalledTimes(1);
     expect(mailServiceMock.sendAppointmentConfirmationEmails).toHaveBeenCalledTimes(1);
   });
 
@@ -190,7 +187,7 @@ describe('PaymentsService - Idempotencia de Webhooks', () => {
     expect(slotInDb.status).toBe(SlotStatus.PENDING_PAYMENT);
     expect(slotInDb.client_id).toBe('client-1');
     expect(orphans).toHaveLength(1);
-    expect(reminderProviderMock.scheduleForConfirmedSlot).not.toHaveBeenCalled();
+    expect(mailServiceMock.sendAppointmentConfirmationEmails).not.toHaveBeenCalled();
   });
 
   it('segundo pago distinto sobre un turno ya confirmado queda como DUPLICATE_PAYMENT', async () => {
@@ -208,7 +205,7 @@ describe('PaymentsService - Idempotencia de Webhooks', () => {
     expect(result.status).toBe('REQUIRES_REFUND');
     expect(result.reason).toBe('DUPLICATE_PAYMENT');
     expect(slotInDb.mp_payment_id).toBe(mockPaymentId);
-    expect(reminderProviderMock.scheduleForConfirmedSlot).toHaveBeenCalledTimes(1);
+    expect(mailServiceMock.sendAppointmentConfirmationEmails).toHaveBeenCalledTimes(1);
   });
 
   it('pago real sin metadata de cliente no confirma (MISSING_CLIENT_BINDING)', async () => {

@@ -279,10 +279,9 @@ const AppContent: React.FC = () => {
     startTimeIso?: string;
     endTimeIso?: string;
     barberPhone?: string;
-    reminderEnqueued: boolean;
-    reminderMessage?: string | null;
     emailMode?: string;
     whatsappBarberNotifyUrl?: string | null;
+    bookingUrl?: string | null;
   } | null>(null);
   const [isLocking, setIsLocking] = useState(false);
 
@@ -447,10 +446,9 @@ const AppContent: React.FC = () => {
             startTimeIso: res.start_time,
             endTimeIso: res.end_time,
             barberPhone: res.barber_phone || schedule.barber.barber_phone,
-            reminderEnqueued: Boolean(res.reminder_enqueued),
-            reminderMessage: res.reminder_message || null,
             emailMode: res.email_mode,
             whatsappBarberNotifyUrl: res.whatsapp_barber_notify_url,
+            bookingUrl: res.booking_url,
           });
         } else if (
           normalizedStatus === 'rejected' ||
@@ -476,7 +474,6 @@ const AppContent: React.FC = () => {
             slotId,
             mpPaymentId: paymentId || 'ACREDITADO',
             barberPhone: schedule.barber.barber_phone,
-            reminderEnqueued: false,
           });
         } else if (normalizedStatus === 'rejected') {
           setStatusMessage(
@@ -654,17 +651,13 @@ const AppContent: React.FC = () => {
         startTimeIso: res.start_time || lockedStart,
         endTimeIso: res.end_time || lockedEnd,
         barberPhone: res.barber_phone || schedule.barber.barber_phone,
-        reminderEnqueued: Boolean(res.reminder_enqueued),
-        reminderMessage: res.reminder_message || null,
         emailMode: res.email_mode,
         whatsappBarberNotifyUrl: res.whatsapp_barber_notify_url,
+        bookingUrl: res.booking_url,
       });
       await loadPublicSchedule(slug);
     } catch {
       const mockPaymentId = `mp_pay_${Date.now()}`;
-      const mockMsg = barberInfo.reminder_addon_active
-        ? `[MOCK DeepSeek IA] Hola Cliente, te recordamos tu turno de 30 min en ${schedule.barber.shop_name}. Seña de $2.000 ARS acreditada.`
-        : null;
       const fallbackStart =
         lockedStart || new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
       const fallbackEnd =
@@ -701,8 +694,6 @@ const AppContent: React.FC = () => {
         startTimeIso: fallbackStart,
         endTimeIso: fallbackEnd,
         barberPhone: schedule.barber.barber_phone,
-        reminderEnqueued: barberInfo.reminder_addon_active,
-        reminderMessage: mockMsg,
         emailMode: 'CONSOLE_FALLBACK',
       });
     }

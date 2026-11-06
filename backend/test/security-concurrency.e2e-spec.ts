@@ -69,6 +69,9 @@ let prisma: PrismaService;
 let mp: MercadoPagoService;
 let jwtService: JwtService;
 const mailCalls: string[] = [];
+/** Cantidad de mails de confirmación enviados para un turno (efecto secundario que no debe duplicarse). */
+const confirmations = (slotId: string) =>
+  mailCalls.filter((m) => m === `sendAppointmentConfirmationEmails|${slotId}`).length;
 const preferenceCalls: { body: any; idempotencyKey?: string }[] = [];
 let ipSeq = 1;
 /** Cada request simula un cliente distinto detrás del proxy (trust proxy = 1). */
@@ -155,14 +158,19 @@ const getSlot = (id: string) => prisma.appointmentSlot.findUniqueOrThrow({ where
 const PW = 'e2e-pass-123';
 
 beforeAll(async () => {
+  // Solo se interceptan los ENVÍOS; los métodos puros (p. ej. buildIcsCalendar) usan el MailService real.
+  const realMail = new MailService({ get: () => undefined } as any);
+  const PURE_MAIL_METHODS = new Set(['buildIcsCalendar', 'formatArgentinaSlotToUtcIcsDate']);
   const mailStub = new Proxy(
     {},
     {
       get: (_t, prop) =>
         prop === 'then'
           ? undefined
-          : async () => {
-              mailCalls.push(String(prop));
+          : PURE_MAIL_METHODS.has(String(prop))
+            ? (realMail as any)[prop].bind(realMail)
+            : async (...args: any[]) => {
+              mailCalls.push(`${String(prop)}|${args[0]?.slotId ?? ''}`);
               return { mode: 'CONSOLE_FALLBACK', clientEmailSent: false };
             },
     },
@@ -198,7 +206,7 @@ beforeAll(async () => {
   jest.spyOn(mp, 'getPayment').mockResolvedValue({ status: 'rejected' } as any);
 
   await prisma.$executeRawUnsafe(
-    'TRUNCATE push_subscriptions, orphan_payments, reminder_queue, appointment_slots, weekly_settlements, barber_profiles, users CASCADE',
+    'TRUNCATE push_subscriptions, orphan_payments, appointment_slots, weekly_settlements, barber_profiles, users CASCADE',
   );
   const bcrypt = await import('bcrypt');
   const pw = await bcrypt.hash(PW, 4);
@@ -402,17 +410,15 @@ describe('2. Concurrencia, bloqueos y pagos', () => {
   test('idempotencia: 10 webhooks simultáneos mismo mp_payment_id', async () => {
     const slot = await mkSlot({ status: 'PENDING_PAYMENT', client_id: clientA.id, locked_until: new Date(Date.now() + 600_000) });
     jest.spyOn(mp, 'getPayment').mockImplementation(approvedPayment(slot.id, clientA.id));
-    const mail0 = mailCalls.filter((m) => m === 'sendAppointmentConfirmationEmails').length;
     const rs = await Promise.all(Array.from({ length: 10 }, () => webhook('7770001')));
     await sleep(2500);
     const final = await getSlot(slot.id);
-    const reminders = await prisma.reminderQueue.count({ where: { slot_id: slot.id } });
-    const mails = mailCalls.filter((m) => m === 'sendAppointmentConfirmationEmails').length - mail0;
+    const mails = confirmations(slot.id);
     check(
       A,
       'Ráfaga 10 webhooks mismo pago',
-      rs.every((r) => r.status === 200) && final.status === 'CONFIRMED' && reminders === 1 && mails === 1,
-      `HTTP 200=${rs.filter((r) => r.status === 200).length}/10, estado=${final.status}, recordatorios=${reminders}, mails=${mails}`,
+      rs.every((r) => r.status === 200) && final.status === 'CONFIRMED' && mails === 1 && final.confirmation_sent_at !== null,
+      `HTTP 200=${rs.filter((r) => r.status === 200).length}/10, estado=${final.status}, confirmaciones=${mails}`,
     );
   });
 
@@ -427,12 +433,12 @@ describe('2. Concurrencia, bloqueos y pagos', () => {
     ]);
     await sleep(2500);
     const final = await getSlot(slot.id);
-    const reminders = await prisma.reminderQueue.count({ where: { slot_id: slot.id } });
+    const mails = confirmations(slot.id);
     check(
       A,
       'Webhook + confirm-return concurrentes',
-      final.status === 'CONFIRMED' && reminders === 1 && rs.every((r) => r.status < 500),
-      `estado=${final.status}, recordatorios=${reminders}, HTTP=${rs.map((r) => r.status).join(',')}`,
+      final.status === 'CONFIRMED' && mails === 1 && rs.every((r) => r.status < 500),
+      `estado=${final.status}, confirmaciones=${mails}, HTTP=${rs.map((r) => r.status).join(',')}`,
     );
   });
 
@@ -442,15 +448,15 @@ describe('2. Concurrencia, bloqueos y pagos', () => {
     await Promise.all([webhook('7770003'), webhook('7770004')]);
     await sleep(2500);
     const final = await getSlot(slot.id);
-    const reminders = await prisma.reminderQueue.count({ where: { slot_id: slot.id } });
+    const mails = confirmations(slot.id);
     const orphans = await prisma.orphanPayment.findMany({ where: { slot_id: slot.id } });
     check(
       A,
       'Dos pagos aprobados mismo slot',
-      final.status === 'CONFIRMED' && reminders === 1 && orphans.length === 1 &&
+      final.status === 'CONFIRMED' && mails === 1 && orphans.length === 1 &&
         orphans[0].status === 'REQUIRES_REFUND' && orphans[0].reason === 'DUPLICATE_PAYMENT' &&
         orphans[0].mp_payment_id !== final.mp_payment_id,
-      `estado=${final.status}, recordatorios=${reminders}, orphan=${orphans[0]?.reason}/${orphans[0]?.status}`,
+      `estado=${final.status}, confirmaciones=${mails}, orphan=${orphans[0]?.reason}/${orphans[0]?.status}`,
     );
   });
 
@@ -734,6 +740,8 @@ describe('4. Notificaciones, recordatorios y Web Push', () => {
 
   test('cron de recordatorios: ventanas, estados e idempotencia con dos instancias concurrentes', async () => {
     await prisma.appointmentSlot.updateMany({ data: { reminder_24h_sent_at: new Date(), reminder_2h_sent_at: new Date() } });
+    // MVP: los recordatorios aplican aunque la barbería NO tenga el add-on activo.
+    await prisma.barberProfile.update({ where: { id: barber.id }, data: { reminder_addon_active: false } });
     const now = new Date();
     const nominalIn = (ms: number) => instantToNominal(new Date(now.getTime() + ms));
     const mk = async (ms: number, status: any) => {
@@ -760,13 +768,14 @@ describe('4. Notificaciones, recordatorios y Web Push', () => {
     await Promise.all([scheduler.runOnce(now), scheduler.runOnce(now)]);
     await scheduler.runOnce(new Date(now.getTime() + 10 * 60_000));
     spy.mockRestore();
+    await prisma.barberProfile.update({ where: { id: barber.id }, data: { reminder_addon_active: true } });
 
     const [s24, s2, sc, sp, so] = await Promise.all([in24, in2, cancelled, pending, outside].map((x) => getSlot(x.id)));
     const count = (id: string) => sends.filter((x) => x === id).length;
 
     check(
       A,
-      'Cron: 1 envío por ventana pese a 2 instancias + corrida siguiente',
+      'Cron: 1 envío por ventana pese a 2 instancias (sin add-on)',
       count(in24.id) === 1 && count(in2.id) === 1 && s24.reminder_24h_sent_at !== null && s24.reminder_2h_sent_at === null && s2.reminder_2h_sent_at !== null,
       `24h=${count(in24.id)} envío(s), 2h=${count(in2.id)} envío(s)`,
     );
@@ -776,6 +785,237 @@ describe('4. Notificaciones, recordatorios y Web Push', () => {
       count(cancelled.id) === 0 && count(pending.id) === 0 && count(outside.id) === 0 &&
         sc.reminder_2h_sent_at === null && sp.reminder_24h_sent_at === null && so.reminder_2h_sent_at === null,
       `cancelado=${count(cancelled.id)}, pendiente=${count(pending.id)}, fuera=${count(outside.id)}`,
+    );
+  });
+});
+
+// ───────────────────────── 5. PÁGINA PÚBLICA DE LA RESERVA ─────────────────────────
+describe('5. Página pública de la reserva (/reserva/:id)', () => {
+  const A = '5. Página reserva';
+  const summaryPath = (bookingUrl: string) => {
+    const u = new URL(bookingUrl);
+    const id = u.pathname.split('/').pop()!;
+    return { id, ref: u.searchParams.get('ref')!, path: `/appointments/${id}/summary?ref=${u.searchParams.get('ref')}` };
+  };
+  const confirmFor = async (clientId: string) => {
+    const slot = await mkSlot({ status: 'PENDING_PAYMENT', client_id: clientId, locked_until: new Date(Date.now() + 600_000) });
+    const sim = await http('POST', '/payments/simulate-webhook', {
+      body: { type: 'payment', payment_id: `mp_pay_${crypto.randomUUID()}`, external_reference: slot.id, status: 'approved' },
+    });
+    return { slot, sim };
+  };
+
+  test('el link de la confirmación abre el resumen del turno sin PII sensible', async () => {
+    await prisma.barberProfile.update({ where: { id: barber.id }, data: { address: 'Av. Corrientes 1234, CABA' } });
+    const { slot, sim } = await confirmFor(clientB.id);
+    const link = summaryPath(sim.body.booking_url);
+    const r = await http('GET', link.path);
+    const raw = JSON.stringify(r.body);
+    const ics = await fetch(base + r.body?.ics_path);
+
+    check(
+      A,
+      'booking_url en la confirmación → resumen 200',
+      sim.body.booking_url?.startsWith('http://localhost:5173/reserva/') && link.id === slot.id && r.status === 200 &&
+        r.body.status === 'CONFIRMED' && r.body.barber_name === 'E2E Barber' && r.body.address === 'Av. Corrientes 1234, CABA' &&
+        /^\d{2}:\d{2}$/.test(r.body.time_label) && r.body.duration_minutes === 30 && r.body.client_first_name === 'E2E',
+      `HTTP ${r.status}, estado=${r.body?.status}, ${r.body?.date_label} ${r.body?.time_label}, ${r.body?.duration_minutes} min`,
+    );
+    check(
+      A,
+      'Resumen sin DNI / teléfono / email del cliente',
+      !raw.includes(clientB.dni) && !raw.includes(clientB.phone) && !raw.includes('b@e2e.test') && !raw.includes('lock_token'),
+      `campos=${Object.keys(r.body || {}).length}`,
+    );
+    check(
+      A,
+      'Botones: WhatsApp cancelar/reprogramar al barbero + .ics',
+      r.body.whatsapp_cancel_url?.startsWith('https://wa.me/5491190000002?text=') &&
+        decodeURIComponent(r.body.whatsapp_cancel_url).includes('Necesito cancelar mi turno') &&
+        decodeURIComponent(r.body.whatsapp_reschedule_url).includes('¿Puedo reprogramar mi turno') &&
+        ics.status === 200 && (ics.headers.get('content-type') || '').includes('text/calendar') &&
+        (await ics.text()).includes('DTSTART:'),
+      `ics HTTP ${ics.status}`,
+    );
+  });
+
+  test('confirm-return solo entrega booking_url a quien trae el payment_id del turno', async () => {
+    const slot = await mkSlot({ status: 'PENDING_PAYMENT', client_id: clientA.id, locked_until: new Date(Date.now() + 600_000) });
+    jest.spyOn(mp, 'getPayment').mockImplementation(approvedPayment(slot.id, clientA.id));
+    await webhook('9990001');
+    await sleep(1500);
+    const anon = await http('POST', '/payments/confirm-return', { body: { slotId: slot.id, status: 'approved' } });
+    const owner = await http('POST', '/payments/confirm-return', { body: { slotId: slot.id, paymentId: '9990001', status: 'approved' } });
+    check(
+      A,
+      'booking_url no se filtra con solo el slotId',
+      anon.body?.booking_url === null && typeof owner.body?.booking_url === 'string' && owner.body.booking_url.includes(`/reserva/${slot.id}?ref=`),
+      `solo slotId → ${anon.body?.booking_url}, con payment_id → ${owner.body?.booking_url ? 'link' : 'null'}`,
+    );
+  });
+
+  test('ref ausente, adulterado o id inválido → 404/400 sin filtrar existencia', async () => {
+    const { sim } = await confirmFor(clientA.id);
+    const link = summaryPath(sim.body.booking_url);
+    const tampered = link.ref.slice(0, -1) + (link.ref.endsWith('A') ? 'B' : 'A');
+    const [noRef, bad, unknown, notUuid] = await Promise.all([
+      http('GET', `/appointments/${link.id}/summary`),
+      http('GET', `/appointments/${link.id}/summary?ref=${tampered}`),
+      http('GET', `/appointments/${crypto.randomUUID()}/summary?ref=${link.ref}`),
+      http('GET', `/appointments/no-es-uuid/summary?ref=${link.ref}`),
+    ]);
+    check(
+      A,
+      'Resumen exige ref firmado',
+      noRef.status === 404 && bad.status === 404 && unknown.status === 404 && notUuid.status === 400 &&
+        bad.body?.message === unknown.body?.message,
+      `sin ref ${noRef.status}, adulterado ${bad.status}, inexistente ${unknown.status}, no-uuid ${notUuid.status}`,
+    );
+  });
+
+  test('.ics exige el ref firmado (mismo 404 que /summary) y no se cachea', async () => {
+    const { slot, sim } = await confirmFor(clientA.id);
+    const link = summaryPath(sim.body.booking_url);
+    const summary = await http('GET', link.path);
+    const tampered = link.ref.slice(0, -1) + (link.ref.endsWith('A') ? 'B' : 'A');
+    // Cuerpo del 404 sin los campos que cambian en cada request (requestId, timestamp).
+    const stable = (text: string) => {
+      const { requestId: _r, timestamp: _t, ...rest } = JSON.parse(text);
+      return JSON.stringify(rest);
+    };
+    const get = (p: string) => fetch(base + p).then(async (r) => ({ status: r.status, headers: r.headers, text: await r.text() }));
+
+    const ok = await get(summary.body.ics_path);
+    const noRef = await get(`/appointments/${slot.id}/ics`);
+    const bad = await get(`/appointments/${slot.id}/ics?ref=${tampered}`);
+    const unknown = await get(`/appointments/${crypto.randomUUID()}/ics?ref=${link.ref}`);
+    const notUuid = await get(`/appointments/no-es-uuid/ics?ref=${link.ref}`);
+    const summary404 = await http('GET', `/appointments/${crypto.randomUUID()}/summary?ref=${link.ref}`);
+
+    check(
+      A,
+      '.ics con ref válido (ics_path del resumen)',
+      summary.body.ics_path === `/appointments/${slot.id}/ics?ref=${link.ref}` && ok.status === 200 &&
+        ok.text.includes('BEGIN:VCALENDAR') && (ok.headers.get('cache-control') || '').includes('no-store') &&
+        ok.headers.get('referrer-policy') === 'no-referrer',
+      `HTTP ${ok.status}, cache-control=${ok.headers.get('cache-control')}, referrer-policy=${ok.headers.get('referrer-policy')}, VCALENDAR=${ok.text.includes('BEGIN:VCALENDAR')}`,
+    );
+    check(
+      A,
+      '.ics sin ref / adulterado / inexistente → 404 idéntico',
+      noRef.status === 404 && bad.status === 404 && unknown.status === 404 && notUuid.status === 400 &&
+        stable(noRef.text) === stable(bad.text) && stable(bad.text) === stable(unknown.text) &&
+        JSON.parse(unknown.text).message === summary404.body?.message && !unknown.text.includes(slot.id),
+      `sin ref ${noRef.status}, adulterado ${bad.status}, inexistente ${unknown.status}, no-uuid ${notUuid.status}, mismo cuerpo=${stable(noRef.text) === stable(unknown.text)}`,
+    );
+  });
+
+  test('turno cancelado y re-reservado por otro cliente: el link viejo no muestra la reserva nueva', async () => {
+    const { slot, sim } = await confirmFor(clientA.id);
+    const oldLink = summaryPath(sim.body.booking_url);
+    await prisma.appointmentSlot.update({ where: { id: slot.id }, data: { status: 'CANCELLED' } });
+    const cancelled = await http('GET', oldLink.path);
+
+    await prisma.appointmentSlot.update({
+      where: { id: slot.id },
+      data: { status: 'PENDING_PAYMENT', client_id: clientB.id, mp_payment_id: null, confirmation_sent_at: null, locked_until: new Date(Date.now() + 600_000) },
+    });
+    const sim2 = await http('POST', '/payments/simulate-webhook', {
+      body: { type: 'payment', payment_id: `mp_pay_${crypto.randomUUID()}`, external_reference: slot.id, status: 'approved' },
+    });
+    const afterRebook = await http('GET', oldLink.path);
+    const oldIcs = await fetch(`${base}/appointments/${slot.id}/ics?ref=${oldLink.ref}`);
+    const newLink = await http('GET', summaryPath(sim2.body.booking_url).path);
+    const newIcs = await fetch(base + newLink.body?.ics_path);
+
+    check(
+      A,
+      'Cancelado se muestra como tal, sin botones de WhatsApp',
+      cancelled.status === 200 && cancelled.body.status === 'CANCELLED' && cancelled.body.whatsapp_cancel_url === null,
+      `HTTP ${cancelled.status}, estado=${cancelled.body?.status}`,
+    );
+    check(
+      A,
+      'Link viejo inválido tras re-reserva del mismo turno (página y .ics)',
+      afterRebook.status === 404 && oldIcs.status === 404 && newLink.status === 200 && newIcs.status === 200 &&
+        newLink.body.client_first_name === 'E2E',
+      `página vieja ${afterRebook.status}, .ics viejo ${oldIcs.status}, página nueva ${newLink.status}, .ics nuevo ${newIcs.status}`,
+    );
+  });
+});
+
+// ───────────────────────── 6. FLUJO CRÍTICO MVP ─────────────────────────
+describe('6. Flujo crítico MVP (seña → webhook → slot)', () => {
+  const A = '6. Flujo MVP';
+
+  test('lock → preferencia de $2000 ARS → webhook aprobado ×2 secuencial → slot CONFIRMED y fuera de agenda', async () => {
+    const slot = await mkSlot();
+    const before = preferenceCalls.length;
+    const lock = await http('POST', `/appointments/${slot.id}/lock`, { body: { dni: clientA.dni, password: PW } });
+    const pref = preferenceCalls[before]?.body;
+    const item = pref?.items?.[0];
+    check(
+      A,
+      'Preferencia por seña exacta',
+      lock.status === 201 && preferenceCalls.length === before + 1 &&
+        pref.items.length === 1 && item.unit_price === 2000 && item.quantity === 1 && item.currency_id === 'ARS',
+      `lock=${lock.status}, items=${pref?.items?.length}, unit_price=${item?.unit_price}, qty=${item?.quantity}, moneda=${item?.currency_id}`,
+    );
+
+    jest.spyOn(mp, 'getPayment').mockImplementation(approvedPayment(slot.id, clientA.id));
+    const first = await webhook('7780001');
+    await sleep(1500);
+    const second = await webhook('7780001');
+    await sleep(1500);
+    const final = await getSlot(slot.id);
+    const orphans = await prisma.orphanPayment.count({ where: { mp_payment_id: '7780001' } });
+    check(
+      A,
+      'Mismo pago aprobado enviado 2 veces',
+      first.status === 200 && second.status === 200 && final.status === 'CONFIRMED' &&
+        final.mp_payment_id === '7780001' && confirmations(slot.id) === 1 && orphans === 0,
+      `HTTP=${first.status},${second.status}, estado=${final.status}, confirmaciones=${confirmations(slot.id)}, orphans=${orphans}`,
+    );
+
+    const relock = await http('POST', `/appointments/${slot.id}/lock`, { body: { dni: clientB.dni, password: PW } });
+    const agenda = await http('GET', `/appointments/public/${barber.slug}`);
+    const listed = JSON.stringify(agenda.body ?? {}).includes(slot.id);
+    const after = await getSlot(slot.id);
+    check(
+      A,
+      'Slot pagado no vuelve a estar disponible',
+      relock.status === 409 && agenda.status === 200 && !listed && after.client_id === clientA.id,
+      `re-lock B=${relock.status}, agenda=${agenda.status}, aparece en agenda=${listed}, titular=${after.client_id === clientA.id ? 'A' : after.client_id}`,
+    );
+  });
+
+  test('pago aprobado sobre slot inexistente → OrphanPayment SLOT_NOT_FOUND', async () => {
+    const ghostId = crypto.randomUUID();
+    jest.spyOn(mp, 'getPayment').mockImplementation(approvedPayment(ghostId, clientA.id));
+    const r = await webhook('7780002');
+    await sleep(1500);
+    const orphan = await prisma.orphanPayment.findUnique({ where: { mp_payment_id: '7780002' } });
+    check(
+      A,
+      'Pago huérfano (slot inexistente)',
+      r.status === 200 && orphan?.reason === 'SLOT_NOT_FOUND' && orphan?.status === 'REQUIRES_REFUND' && orphan?.slot_id === ghostId,
+      `HTTP=${r.status}, orphan=${orphan?.reason}/${orphan?.status}`,
+    );
+  });
+
+  test('pago aprobado sobre slot CANCELLED → OrphanPayment SLOT_CANCELLED y slot intacto', async () => {
+    const slot = await mkSlot({ status: 'CANCELLED' });
+    jest.spyOn(mp, 'getPayment').mockImplementation(approvedPayment(slot.id, clientA.id));
+    const r = await webhook('7780003');
+    await sleep(1500);
+    const final = await getSlot(slot.id);
+    const orphan = await prisma.orphanPayment.findUnique({ where: { mp_payment_id: '7780003' } });
+    check(
+      A,
+      'Pago huérfano (slot cancelado)',
+      r.status === 200 && final.status === 'CANCELLED' && final.mp_payment_id === null &&
+        orphan?.reason === 'SLOT_CANCELLED' && orphan?.status === 'REQUIRES_REFUND' && orphan?.client_id === clientA.id,
+      `HTTP=${r.status}, slot=${final.status}, orphan=${orphan?.reason}/${orphan?.status}`,
     );
   });
 });

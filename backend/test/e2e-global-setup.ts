@@ -1,5 +1,5 @@
 /**
- * Levanta un PostgreSQL embebido (PGlite) efímero en memoria y aplica el schema de Prisma.
+ * Levanta un PostgreSQL embebido (PGlite) efímero en memoria y aplica las migraciones versionadas de Prisma.
  * La suite e2e NUNCA usa el DATABASE_URL del .env: corre 100% local y descartable.
  */
 import { execFile } from 'child_process';
@@ -35,7 +35,7 @@ export default async function globalSetup(): Promise<void> {
   const backendDir = path.resolve(__dirname, '..');
   await promisify(execFile)(
     process.execPath,
-    [require.resolve('prisma/build/index.js', { paths: [backendDir] }), 'db', 'push', '--skip-generate', '--accept-data-loss'],
+    [require.resolve('prisma/build/index.js', { paths: [backendDir] }), 'migrate', 'deploy'],
     { cwd: backendDir, env: { ...process.env, DATABASE_URL: url } },
   );
 

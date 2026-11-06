@@ -29,7 +29,7 @@ import {
   getWeekBoundsUtc,
   normalizeArgentinaWhatsAppNumber,
 } from '../utils/postBookingAndGamification';
-import { formatDateHeader, formatTime30m } from './PublicBookingView';
+import { formatDateHeader, formatTime30m } from '../utils/slotFormat';
 
 interface BarberDashboardViewProps {
   barberInfo: {

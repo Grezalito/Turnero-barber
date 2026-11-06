@@ -26,13 +26,6 @@ enum OrphanPaymentStatus {
   RESOLVED
 }
 
-enum ReminderStatus {
-  PENDING
-  SENT
-  FAILED
-  CANCELLED
-}
-
 model User {
   id                 String             @id @default(uuid())
   dni                String             @unique
@@ -60,7 +53,6 @@ model BarberProfile {
   reminder_addon_active Boolean            @default(false)
   reminder_config       Json?
   slots                 AppointmentSlot[]
-  reminders             ReminderQueue[]
   settlements           WeeklySettlement[]
   created_at            DateTime           @default(now())
   updated_at            DateTime           @updatedAt
@@ -106,7 +98,6 @@ model AppointmentSlot {
   confirmation_sent_at DateTime?
   reminder_24h_sent_at DateTime?
   reminder_2h_sent_at  DateTime?
-  reminders            ReminderQueue[]
   push_subscriptions   PushSubscription[]
   created_at           DateTime           @default(now())
   updated_at           DateTime           @updatedAt
@@ -115,23 +106,6 @@ model AppointmentSlot {
   @@index([status, locked_until])
   @@index([status, start_time])
   @@map("appointment_slots")
-}
-
-model ReminderQueue {
-  id                String          @id @default(uuid())
-  slot_id           String
-  slot              AppointmentSlot @relation(fields: [slot_id], references: [id], onDelete: Cascade)
-  barber_id         String
-  barber            BarberProfile   @relation(fields: [barber_id], references: [id], onDelete: Cascade)
-  client_phone      String
-  scheduled_for     DateTime
-  status            ReminderStatus  @default(PENDING)
-  generated_message String?
-  created_at        DateTime        @default(now())
-  updated_at        DateTime        @updatedAt
-
-  @@index([status, scheduled_for])
-  @@map("reminder_queue")
 }
 
 /// Pagos aprobados por Mercado Pago que no pudieron asociarse a un turno

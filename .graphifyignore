@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.agy-staff/
+.gemini/
+graphify-out/
+*.lock
+package-lock.json

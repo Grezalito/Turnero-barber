@@ -11,6 +11,7 @@ import {
   CalendarX2,
   Loader2,
   KeyRound,
+  Ticket,
 } from 'lucide-react';
 import { api } from '../services/api';
 import {
@@ -24,6 +25,7 @@ import {
   buildWhatsAppShareUrl,
 } from '../utils/postBookingAndGamification';
 import { SandboxCheckoutModal } from './SandboxCheckoutModal';
+import { formatDateHeader, formatTime30m } from '../utils/slotFormat';
 
 export interface InlineBookingClientData {
   dni: string;
@@ -58,48 +60,11 @@ interface PublicBookingViewProps {
     startTimeIso?: string;
     endTimeIso?: string;
     barberPhone?: string;
-    reminderEnqueued: boolean;
-    reminderMessage?: string | null;
     emailMode?: string;
     whatsappBarberNotifyUrl?: string | null;
+    bookingUrl?: string | null;
   } | null;
   isLocking: boolean;
-}
-
-export function formatTime30m(iso: string): string {
-  const d = new Date(iso);
-  const hh = String(d.getUTCHours()).padStart(2, '0');
-  const mm = String(d.getUTCMinutes()).padStart(2, '0');
-  return `${hh}:${mm}`;
-}
-
-export function formatDateHeader(dateStr: string): {
-  dayName: string;
-  dayNumber: string;
-  monthShort: string;
-} {
-  const [y, m, d] = dateStr.split('-').map(Number);
-  const dateObj = new Date(Date.UTC(y, m - 1, d));
-  const days = ['DOM', 'LUN', 'MAR', 'MIÉ', 'JUE', 'VIE', 'SÁB'];
-  const months = [
-    'ENE',
-    'FEB',
-    'MAR',
-    'ABR',
-    'MAY',
-    'JUN',
-    'JUL',
-    'AGO',
-    'SEP',
-    'OCT',
-    'NOV',
-    'DIC',
-  ];
-  return {
-    dayName: days[dateObj.getUTCDay()],
-    dayNumber: String(d).padStart(2, '0'),
-    monthShort: months[dateObj.getUTCMonth()],
-  };
 }
 
 export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
@@ -378,6 +343,9 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
                   onClick={() =>
                     api.downloadSlotIcs({
                       slotId: confirmedSlotInfo.slotId,
+                      bookingRef: confirmedSlotInfo.bookingUrl
+                        ? new URL(confirmedSlotInfo.bookingUrl).searchParams.get('ref')
+                        : null,
                       shopName: schedule.barber.shop_name,
                       address: schedule.barber.address,
                       barberName: schedule.barber.barber_name,
@@ -404,6 +372,15 @@ export const PublicBookingView: React.FC<PublicBookingViewProps> = ({
                   </a>
                 )}
               </div>
+              {confirmedSlotInfo.bookingUrl && (
+                <a
+                  href={new URL(confirmedSlotInfo.bookingUrl).pathname + new URL(confirmedSlotInfo.bookingUrl).search}
+                  className="min-h-[44px] px-3 rounded-lg bg-[#090D16] border border-[#1E293B] hover:border-[#334155] text-[#F8FAFC] text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
+                >
+                  <Ticket className="w-4 h-4 text-[#3B82F6] shrink-0" />
+                  <span>Ver o gestionar mi turno</span>
+                </a>
+              )}
               <PushReminderOptIn slotId={confirmedSlotInfo.slotId} />
               </div>
             );

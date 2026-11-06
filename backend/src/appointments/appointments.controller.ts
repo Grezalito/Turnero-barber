@@ -4,7 +4,9 @@ import {
   Get,
   Headers,
   Param,
+  ParseUUIDPipe,
   Post,
+  Query,
   Res,
   UseGuards,
 } from '@nestjs/common';
@@ -61,13 +63,26 @@ export class AppointmentsController {
   }
 
   @Public()
+  @Get(':slotId/summary')
+  async getPublicBookingSummary(
+    @Param('slotId', new ParseUUIDPipe({ version: '4' })) slotId: string,
+    @Query('ref') ref?: string,
+  ) {
+    return this.appointmentsService.getPublicBookingSummary(slotId, ref);
+  }
+
+  @Public()
   @Get(':slotId/ics')
   async downloadSlotIcs(
-    @Param('slotId') slotId: string,
+    @Param('slotId', new ParseUUIDPipe({ version: '4' })) slotId: string,
+    @Query('ref') ref: string | undefined,
     @Res() res: Response,
   ) {
     const { filename, icsContent } =
-      await this.appointmentsService.generateSlotIcsFile(slotId);
+      await this.appointmentsService.generateSlotIcsFile(slotId, ref);
+    // La URL lleva una credencial (ref): que no quede en cachés compartidas ni se filtre por Referer.
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
     res.setHeader(
       'Content-Disposition',

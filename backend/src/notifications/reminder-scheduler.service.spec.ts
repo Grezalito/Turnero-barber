@@ -21,9 +21,6 @@ function createPrismaFake(slots: any[]) {
         if (expected === null ? actual !== null : actual?.getTime() !== expected.getTime()) return false;
       }
     }
-    if (where.barber?.reminder_addon_active !== undefined && slot.barber.reminder_addon_active !== where.barber.reminder_addon_active) {
-      return false;
-    }
     return true;
   };
 
@@ -65,7 +62,11 @@ function build(slots: any[], opts: { pushDelivered?: number; mailSent?: boolean 
     sendAppointmentReminderEmail: jest.fn().mockResolvedValue({ sent: opts.mailSent ?? true, mode: 'SMTP' }),
   };
   const push = { sendToSlot: jest.fn().mockResolvedValue(opts.pushDelivered ?? 0) };
-  const service = new ReminderSchedulerService(prisma as any, mail as any, push as any);
+  const bookingLinks = {
+    path: (slot: any) => `/reserva/${slot.id}?ref=test`,
+    url: (slot: any) => `https://turnazo.app/reserva/${slot.id}?ref=test`,
+  };
+  const service = new ReminderSchedulerService(prisma as any, mail as any, push as any, bookingLinks as any);
   return { service, prisma, mail, push };
 }
 
@@ -191,15 +192,29 @@ describe('ReminderSchedulerService', () => {
     expect(slot.reminder_2h_sent_at).not.toBeNull();
   });
 
-  it('solo aplica a barberías con el add-on de recordatorios activo', async () => {
-    const slot = slotStartingIn(2 * HOUR, {
+  it('aplica a todos los turnos confirmados, tengan o no el add-on activo (MVP)', async () => {
+    const withAddon = slotStartingIn(2 * HOUR);
+    const withoutAddon = slotStartingIn(2 * HOUR + 5 * MIN, {
       barber: { reminder_addon_active: false, shop_name: 'X', slug: 'x', address: null, user: { name: 'Y' } },
     });
-    const { service, mail } = build([slot]);
+    const { service, mail } = build([withAddon, withoutAddon]);
+
+    const stats = await service.runOnce(NOW);
+
+    expect(stats.sent).toBe(2);
+    expect(mail.sendAppointmentReminderEmail).toHaveBeenCalledTimes(2);
+  });
+
+  it('el push y el email llevan el link a la página pública de la reserva', async () => {
+    const slot = slotStartingIn(24 * HOUR);
+    const { service, push, mail } = build([slot], { pushDelivered: 1 });
 
     await service.runOnce(NOW);
 
-    expect(mail.sendAppointmentReminderEmail).not.toHaveBeenCalled();
+    expect(push.sendToSlot).toHaveBeenCalledWith(slot.id, expect.objectContaining({ url: `/reserva/${slot.id}?ref=test` }));
+    expect(mail.sendAppointmentReminderEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ bookingUrl: `https://turnazo.app/reserva/${slot.id}?ref=test` }),
+    );
   });
 
   it('el copy del recordatorio usa la hora de Buenos Aires', async () => {

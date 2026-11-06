@@ -17,3 +17,5 @@ build/
 # Logs y temporales
 npm-debug.log*
 *.log
+graphify-out/
+graphify-out/

@@ -78,3 +78,25 @@ export function buildBarberNotificationWhatsAppUrl(ctx: SlotMessageContext): str
   const phone = normalizeArgentinaWhatsAppNumber(ctx.barberPhone);
   return phone ? waLink(phone, buildBarberNotificationMessage(ctx)) : null;
 }
+
+/** Pedido de cancelación del cliente al barbero (la seña no es reembolsable). */
+export function buildBarberCancellationRequestWhatsAppUrl(ctx: SlotMessageContext): string | null {
+  const phone = normalizeArgentinaWhatsAppNumber(ctx.barberPhone);
+  if (!phone) return null;
+  const message =
+    `Hola ${ctx.barberName}, soy ${ctx.clientName}. Necesito cancelar mi turno del ` +
+    `${formatSlotDateAr(ctx.startTime)} a las ${formatSlotTimeAr(ctx.startTime)} hs en ${ctx.shopName}. ` +
+    `Entiendo que la seña no es reembolsable. Detalle: ${ctx.manageUrl}`;
+  return waLink(phone, message);
+}
+
+/** Pedido de reprogramación del cliente al barbero. */
+export function buildBarberRescheduleRequestWhatsAppUrl(ctx: SlotMessageContext): string | null {
+  const phone = normalizeArgentinaWhatsAppNumber(ctx.barberPhone);
+  if (!phone) return null;
+  const message =
+    `Hola ${ctx.barberName}, soy ${ctx.clientName}. ¿Puedo reprogramar mi turno del ` +
+    `${formatSlotDateAr(ctx.startTime)} a las ${formatSlotTimeAr(ctx.startTime)} hs en ${ctx.shopName}? ` +
+    `¿Qué otros horarios tenés disponibles? Detalle: ${ctx.manageUrl}`;
+  return waLink(phone, message);
+}

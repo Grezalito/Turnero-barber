@@ -1,6 +1,7 @@
 import {
   AdminBarberItem,
   AppointmentSlot,
+  BookingSummary,
   ClientAppointmentSlot,
   LockSlotResponse,
   PublicBarberScheduleResponse,
@@ -183,12 +184,15 @@ export const api = {
     );
   },
 
-  getIcsDownloadUrl(slotId: string): string {
-    return `${API_BASE_URL}/appointments/${encodeURIComponent(slotId)}/ics`;
+  /** URL del .ics del servidor: requiere el `ref` firmado de la reserva (mismo que /reserva/:id). */
+  getIcsDownloadUrl(slotId: string, ref: string): string {
+    return `${API_BASE_URL}/appointments/${encodeURIComponent(slotId)}/ics?ref=${encodeURIComponent(ref)}`;
   },
 
   async downloadSlotIcs(params: {
     slotId: string;
+    /** `ref` firmado de la reserva. Sin él no se consulta al servidor (respondería 404). */
+    bookingRef?: string | null;
     shopName: string;
     address?: string | null;
     barberName?: string;
@@ -196,14 +200,16 @@ export const api = {
     endTimeIso: string;
     mpPaymentId: string;
   }) {
-    let icsText: string;
-    try {
-      const res = await fetch(
-        `${API_BASE_URL}/appointments/${encodeURIComponent(params.slotId)}/ics`,
-      );
-      if (!res.ok) throw new Error('Fallback local ICS');
-      icsText = await res.text();
-    } catch {
+    let icsText: string | null = null;
+    if (params.bookingRef) {
+      try {
+        const res = await fetch(api.getIcsDownloadUrl(params.slotId, params.bookingRef));
+        if (res.ok) icsText = await res.text();
+      } catch {
+        // sin red: se usa el .ics generado localmente
+      }
+    }
+    if (!icsText) {
       icsText = buildLocalIcsContent(params);
     }
 
@@ -355,6 +361,13 @@ export const api = {
     );
     clearLockToken(slotId);
     return res;
+  },
+
+  async getBookingSummary(slotId: string, ref: string): Promise<BookingSummary> {
+    return request<BookingSummary>(
+      `/appointments/${encodeURIComponent(slotId)}/summary?ref=${encodeURIComponent(ref)}`,
+      { skipAuth: true },
+    );
   },
 
   async getVapidPublicKey(): Promise<{ enabled: boolean; public_key: string | null }> {

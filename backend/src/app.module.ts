@@ -8,7 +8,6 @@ import { MailModule } from './mail/mail.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { PaymentsModule } from './payments/payments.module';
 import { PrismaModule } from './prisma/prisma.module';
-import { RemindersModule } from './reminders/reminders.module';
 import { SecurityModule } from './security/security.module';
 
 @Module({
@@ -25,7 +24,6 @@ import { SecurityModule } from './security/security.module';
     AdminModule,
     AppointmentsModule,
     PaymentsModule,
-    RemindersModule,
     NotificationsModule,
   ],
 })

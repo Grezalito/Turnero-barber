@@ -88,10 +88,8 @@ export interface WebhookSimulationResponse {
   end_time?: string;
   barber_phone?: string;
   shop_name?: string;
-  reminder_enqueued?: boolean;
-  reminder_id?: string | null;
-  reminder_message?: string | null;
-  reminder_scheduled_for?: string | null;
+  /** Página pública de la reserva (/reserva/:id?ref=...). */
+  booking_url?: string | null;
   email_notified?: boolean;
   email_mode?: 'SMTP' | 'CONSOLE_FALLBACK';
   reason?: string;
@@ -150,12 +148,8 @@ export interface ClientAppointmentSlot extends AppointmentSlot {
       phone: string;
     };
   };
-  reminders?: Array<{
-    id: string;
-    status: string;
-    scheduled_for: string;
-    generated_message?: string | null;
-  }>;
+  /** Ruta relativa a la página pública de la reserva. */
+  booking_url?: string;
 }
 
 export interface AdminBarberItem {
@@ -175,4 +169,28 @@ export interface AdminBarberItem {
     created_at: string;
   };
   created_at: string;
+}
+
+/** GET /appointments/:id/summary — página pública de la reserva. */
+export interface BookingSummary {
+  id: string;
+  status: SlotStatus;
+  is_past: boolean;
+  start_time: string;
+  end_time: string;
+  date_label: string;
+  time_label: string;
+  end_time_label: string;
+  duration_minutes: number;
+  timezone: string;
+  deposit_amount: number;
+  client_first_name: string;
+  shop_name: string;
+  barber_name: string;
+  barber_slug: string;
+  address?: string | null;
+  mp_payment_reference: string | null;
+  ics_path: string;
+  whatsapp_cancel_url: string | null;
+  whatsapp_reschedule_url: string | null;
 }

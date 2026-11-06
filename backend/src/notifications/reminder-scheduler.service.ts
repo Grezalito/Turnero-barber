@@ -5,6 +5,7 @@ import { MailService } from '../mail/mail.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { computeReminderWindows, ReminderWindow } from './reminder-windows.util';
 import { formatSlotTimeAr } from './slot-time.util';
+import { BookingLinkService } from './booking-link.service';
 import { WebPushService } from './web-push.service';
 
 export interface ReminderRunStats {
@@ -19,7 +20,7 @@ export interface ReminderRunStats {
  *
  * Garantías:
  *  - Solo turnos CONFIRMED (nunca cancelados, pendientes ni disponibles).
- *  - Solo barberías con el add-on de recordatorios activo (feature paga del modelo de negocio).
+ *  - Aplica a TODOS los turnos confirmados (MVP: sin depender del add-on `reminder_addon_active`).
  *  - Idempotencia: cada recordatorio se RECLAMA con un update condicional
  *    (`WHERE id = ? AND status = CONFIRMED AND reminder_X_sent_at IS NULL`) ANTES de enviarse.
  *    Dos instancias o un reinicio nunca envían el mismo recordatorio dos veces.
@@ -35,6 +36,7 @@ export class ReminderSchedulerService {
     private readonly prisma: PrismaService,
     private readonly mailService: MailService,
     private readonly webPush: WebPushService,
+    private readonly bookingLinks: BookingLinkService,
   ) {}
 
   @Cron('*/10 * * * *', { name: 'appointment-reminders', timeZone: 'UTC' })
@@ -69,7 +71,6 @@ export class ReminderSchedulerService {
         status: SlotStatus.CONFIRMED,
         start_time: { gte: window.fromNominal, lte: window.toNominal },
         [window.sentAtField]: null,
-        barber: { reminder_addon_active: true },
       },
       include: { client: true, barber: { include: { user: true } } },
       orderBy: { start_time: 'asc' },
@@ -121,7 +122,7 @@ export class ReminderSchedulerService {
     const pushDelivered = await this.webPush.sendToSlot(slot.id, {
       title,
       body,
-      url: `/${slot.barber.slug}`,
+      url: this.bookingLinks.path(slot),
       tag: `turno-${slot.id}`,
     });
     if (pushDelivered > 0) channels++;
@@ -136,6 +137,7 @@ export class ReminderSchedulerService {
         startTime: slot.start_time,
         endTime: slot.end_time,
         kind: window.kind,
+        bookingUrl: this.bookingLinks.url(slot),
       });
       if (mail.sent) channels++;
     }

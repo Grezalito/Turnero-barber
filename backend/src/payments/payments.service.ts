@@ -2,7 +2,6 @@ import {
   BadGatewayException,
   BadRequestException,
   ConflictException,
-  Inject,
   Injectable,
   Logger,
   NotFoundException,
@@ -13,10 +12,6 @@ import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 import { MailService } from '../mail/mail.service';
 import { PrismaService } from '../prisma/prisma.service';
-import {
-  IReminderProvider,
-  REMINDER_PROVIDER,
-} from '../reminders/reminder.interface';
 import {
   maskDni,
   sanitizeControlChars,
@@ -29,6 +24,7 @@ import {
   isWellFormedLockToken,
 } from '../appointments/lock-token.util';
 import { MercadoPagoService } from './mercadopago.service';
+import { BookingLinkService } from '../notifications/booking-link.service';
 import { buildBarberNotificationWhatsAppUrl } from '../notifications/whatsapp-link.util';
 
 export const PLATFORM_DEPOSIT_ARS = 2000;
@@ -83,9 +79,8 @@ export class PaymentsService {
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
     private readonly mailService: MailService,
-    @Inject(REMINDER_PROVIDER)
-    private readonly reminderProvider: IReminderProvider,
     private readonly mercadoPagoService: MercadoPagoService,
+    private readonly bookingLinks: BookingLinkService,
   ) {}
 
   isPaymentNotification(
@@ -479,7 +474,6 @@ export class PaymentsService {
         include: {
           barber: { include: { user: true } },
           client: true,
-          reminders: { orderBy: { created_at: 'desc' }, take: 1 },
         },
       });
 
@@ -490,7 +484,6 @@ export class PaymentsService {
         existingSlot.status === SlotStatus.CONFIRMED &&
         (!rawPaymentId || existingSlot.mp_payment_id === rawPaymentId)
       ) {
-        const latestReminder = existingSlot.reminders[0];
         return {
           received: true,
           processed: true,
@@ -504,12 +497,12 @@ export class PaymentsService {
           barber_phone: existingSlot.barber.user.phone,
           shop_name: existingSlot.barber.shop_name,
           barber_slug: existingSlot.barber.slug,
-          reminder_enqueued: Boolean(latestReminder),
-          reminder_id: latestReminder?.id || null,
-          reminder_message: latestReminder?.generated_message || null,
-          reminder_scheduled_for: latestReminder?.scheduled_for
-            ? latestReminder.scheduled_for.toISOString()
-            : null,
+          // El link a la reserva solo se entrega a quien demuestra conocer el pago (retorno real de MP):
+          // los ids de turno son visibles en la agenda pública antes de reservarse.
+          booking_url:
+            rawPaymentId && existingSlot.mp_payment_id === rawPaymentId
+              ? this.bookingLinks.url(existingSlot)
+              : null,
         };
       }
     }
@@ -549,10 +542,6 @@ export class PaymentsService {
     };
   }
 
-  /**
-   * Procesa el Webhook de Mercado Pago verificando estado `approved` e idempotencia con `mp_payment_id` (@unique).
-   * Pasa el turno a CONFIRMED y encola el recordatorio en ReminderQueue si reminder_addon_active == true.
-   */
   /**
    * Procesa la notificación de pago en segundo plano de manera segura (verify-then-fetch)
    * e idempotente (Prisma transaction con actualización condicional y P2002 handling).
@@ -711,7 +700,6 @@ export class PaymentsService {
       this.logger.log(
         `[Idempotencia] Pago ${mpPaymentId} ya fue procesado para el slot ${confirmedSlot.id}.`,
       );
-      const latestRem = confirmedSlot.reminders?.[0];
       return {
         received: true,
         processed: true,
@@ -725,31 +713,12 @@ export class PaymentsService {
         barber_phone: confirmedSlot.barber?.user?.phone,
         shop_name: confirmedSlot.barber?.shop_name,
         barber_slug: confirmedSlot.barber?.slug,
-        reminder_enqueued: Boolean(latestRem),
-        reminder_id: latestRem?.id || null,
-        reminder_message: latestRem?.generated_message || null,
+        booking_url: this.bookingLinks.url(confirmedSlot),
       };
     }
 
-    // Efectos secundarios solo si ESTA ejecución realizó la transición
-    let reminderRecord: {
-      id: string;
-      generated_message: string | null;
-      scheduled_for: Date;
-    } | null = null;
-
-    if (confirmedSlot.barber.reminder_addon_active) {
-      reminderRecord = await this.reminderProvider.scheduleForConfirmedSlot({
-        slotId: confirmedSlot.id,
-        barberId: confirmedSlot.barber_id,
-        clientPhone: confirmedSlot.client?.phone || '+5491100000000',
-        clientName: confirmedSlot.client?.name || 'Cliente',
-        shopName: confirmedSlot.barber.shop_name,
-        startTime: confirmedSlot.start_time,
-        reminderAddonActive: confirmedSlot.barber.reminder_addon_active,
-      });
-    }
-
+    // Efectos secundarios solo si ESTA ejecución realizó la transición.
+    // Los recordatorios 24 hs / 2 hs los envía ReminderSchedulerService a partir del estado CONFIRMED.
     // Reclamo atómico de la confirmación: nunca se envía dos veces aunque haya reintentos concurrentes.
     const confirmationClaim = await this.prisma.appointmentSlot.updateMany({
       where: { id: confirmedSlot.id, confirmation_sent_at: null },
@@ -765,7 +734,7 @@ export class PaymentsService {
       startTime: confirmedSlot.start_time,
       endTime: confirmedSlot.end_time,
       depositAmountArs: confirmedSlot.deposit_amount,
-      manageUrl: this.buildManageUrl(confirmedSlot.barber.slug),
+      manageUrl: this.bookingLinks.url(confirmedSlot),
     };
 
     const emailResult = confirmationClaim.count === 0
@@ -784,6 +753,7 @@ export class PaymentsService {
         endTime: confirmedSlot.end_time,
         mpPaymentId: confirmedSlot.mp_payment_id || mpPaymentId,
         depositAmountArs: confirmedSlot.deposit_amount,
+        bookingUrl: this.bookingLinks.url(confirmedSlot),
       });
 
     return {
@@ -798,29 +768,11 @@ export class PaymentsService {
       barber_phone: confirmedSlot.barber.user.phone,
       shop_name: confirmedSlot.barber.shop_name,
       barber_slug: confirmedSlot.barber.slug,
-      reminder_enqueued: Boolean(reminderRecord),
-      reminder_id: reminderRecord?.id || null,
-      reminder_message: reminderRecord?.generated_message || null,
-      reminder_scheduled_for: reminderRecord?.scheduled_for
-        ? reminderRecord.scheduled_for.toISOString()
-        : null,
+      booking_url: this.bookingLinks.url(confirmedSlot),
       email_notified: emailResult.clientEmailSent,
       email_mode: emailResult.mode,
       whatsapp_barber_notify_url: buildBarberNotificationWhatsAppUrl(whatsappContext),
     };
-  }
-
-  /** URL pública donde el cliente vuelve a la barbería (gestión / nueva reserva). */
-  buildManageUrl(barberSlug: string): string {
-    const base = (
-      this.configService.get<string>('FRONTEND_URL') ||
-      this.configService.get<string>('PUBLIC_APP_URL') ||
-      'http://localhost:5173'
-    )
-      .split(',')[0]
-      .trim()
-      .replace(/\/+$/, '');
-    return `${base}/${encodeURIComponent(barberSlug)}`;
   }
 
   /**
@@ -850,7 +802,6 @@ export class PaymentsService {
     const slotInclude = {
       barber: { include: { user: true } },
       client: true,
-      reminders: { orderBy: { created_at: 'desc' as const }, take: 1 },
     };
 
     const existingByPayment = await tx.appointmentSlot.findUnique({

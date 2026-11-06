@@ -8,7 +8,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { ReminderStatus, Role, SlotStatus } from '@prisma/client';
+import { Role, SlotStatus } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { JwtPayloadUser } from '../auth/decorators/current-user.decorator';
 import { MailService } from '../mail/mail.service';
@@ -23,7 +23,21 @@ import {
   maskFullNameForPublicArtifact,
   sanitizeControlChars,
 } from '../security/pii-sanitizer.util';
-import { buildClientConfirmationWhatsAppUrl } from '../notifications/whatsapp-link.util';
+import {
+  BOOKING_NOT_FOUND_MESSAGE,
+  BookingLinkService,
+} from '../notifications/booking-link.service';
+import {
+  formatSlotDateAr,
+  formatSlotTimeAr,
+  instantToNominal,
+  slotDurationMinutes,
+} from '../notifications/slot-time.util';
+import {
+  buildBarberCancellationRequestWhatsAppUrl,
+  buildBarberRescheduleRequestWhatsAppUrl,
+  buildClientConfirmationWhatsAppUrl,
+} from '../notifications/whatsapp-link.util';
 import { LockSlotDto } from './dto/lock-slot.dto';
 import {
   generateLockToken,
@@ -49,6 +63,7 @@ export class AppointmentsService {
     private readonly paymentsService: PaymentsService,
     private readonly mailService: MailService,
     private readonly jwtService: JwtService,
+    private readonly bookingLinks: BookingLinkService,
   ) {}
 
   /**
@@ -326,7 +341,7 @@ export class AppointmentsService {
                 startTime: slot.start_time,
                 endTime: slot.end_time,
                 depositAmountArs: slot.deposit_amount,
-                manageUrl: this.paymentsService.buildManageUrl(barber.slug),
+                manageUrl: this.bookingLinks.url(slot),
               })
             : null,
       })),
@@ -363,29 +378,78 @@ export class AppointmentsService {
             },
           },
         },
-        reminders: {
-          orderBy: { created_at: 'desc' },
-          take: 1,
-          select: {
-            id: true,
-            status: true,
-            scheduled_for: true,
-            generated_message: true,
-          },
-        },
       },
       orderBy: { start_time: 'asc' },
     });
 
     return {
-      slots,
+      slots: slots.map(({ lock_token_hash: _omit, ...slot }) => ({
+        ...slot,
+        booking_url: this.bookingLinks.path(slot),
+      })),
+    };
+  }
+
+  /**
+   * Página pública de una reserva (`/reserva/:id?ref=...`), sin login.
+   * Exige el `ref` firmado (turno + cliente + pago): un link viejo nunca muestra una reserva
+   * posterior del mismo horario. Responde 404 idéntico para "no existe" y "ref inválido".
+   * Minimización de PII: solo el nombre de pila del cliente; nunca DNI, teléfono ni email.
+   */
+  async getPublicBookingSummary(slotId: string, ref?: string) {
+    const slot = await this.prisma.appointmentSlot.findUnique({
+      where: { id: slotId },
+      include: { barber: { include: { user: true } }, client: true },
+    });
+
+    if (!slot || !this.bookingLinks.verify(slot, ref)) {
+      throw new NotFoundException(BOOKING_NOT_FOUND_MESSAGE);
+    }
+
+    const clientFirstName = (slot.client?.name || 'Cliente').trim().split(/\s+/)[0];
+    const waContext = {
+      clientName: clientFirstName,
+      barberName: slot.barber.user.name,
+      barberPhone: slot.barber.user.phone,
+      shopName: slot.barber.shop_name,
+      startTime: slot.start_time,
+      endTime: slot.end_time,
+      depositAmountArs: slot.deposit_amount,
+      manageUrl: this.bookingLinks.url(slot),
+    };
+    const isPast = slot.end_time.getTime() < instantToNominal(new Date()).getTime();
+    const canRequestChanges = slot.status === SlotStatus.CONFIRMED && !isPast;
+
+    return {
+      id: slot.id,
+      status: slot.status,
+      is_past: isPast,
+      start_time: slot.start_time.toISOString(),
+      end_time: slot.end_time.toISOString(),
+      date_label: formatSlotDateAr(slot.start_time),
+      time_label: formatSlotTimeAr(slot.start_time),
+      end_time_label: formatSlotTimeAr(slot.end_time),
+      duration_minutes: slotDurationMinutes(slot.start_time, slot.end_time),
+      timezone: 'America/Argentina/Buenos_Aires',
+      deposit_amount: slot.deposit_amount,
+      client_first_name: clientFirstName,
+      shop_name: slot.barber.shop_name,
+      barber_name: slot.barber.user.name,
+      barber_slug: slot.barber.slug,
+      address: slot.barber.address,
+      mp_payment_reference: slot.mp_payment_id ? `***${slot.mp_payment_id.slice(-4)}` : null,
+      ics_path: this.bookingLinks.icsPath(slot),
+      whatsapp_cancel_url: canRequestChanges ? buildBarberCancellationRequestWhatsAppUrl(waContext) : null,
+      whatsapp_reschedule_url: canRequestChanges ? buildBarberRescheduleRequestWhatsAppUrl(waContext) : null,
     };
   }
 
   /**
    * Genera el archivo .ICS para un turno específico (Apple Calendar, Outlook, Google Calendar).
+   * Endpoint público: exige el mismo `ref` firmado que la página /reserva/:id. Turno inexistente
+   * y ref inválido responden el MISMO 404.
    */
-  async generateSlotIcsFile(slotId: string): Promise<{
+  async generateSlotIcsFile(slotId: string, ref?: string): Promise<{
     filename: string;
     icsContent: string;
   }> {
@@ -399,8 +463,8 @@ export class AppointmentsService {
       },
     });
 
-    if (!slot) {
-      throw new NotFoundException(`No se encontró el turno con ID ${slotId}`);
+    if (!slot || !this.bookingLinks.verify(slot, ref)) {
+      throw new NotFoundException(BOOKING_NOT_FOUND_MESSAGE);
     }
 
     // En artefactos públicos no autenticados (.ICS), aplicamos minimización y enmascaramiento de PII (ISO/IEC 27701 7.4.5 / ISO 27001 A.8.11)
@@ -479,17 +543,8 @@ export class AppointmentsService {
     const hadPaidDeposit =
       slot.status === SlotStatus.CONFIRMED || Boolean(slot.mp_payment_id);
 
+    // Los recordatorios solo se envían a turnos CONFIRMED: al cancelar dejan de aplicar automáticamente.
     const updatedSlot = await this.prisma.$transaction(async (tx) => {
-      await tx.reminderQueue.updateMany({
-        where: {
-          slot_id: slot.id,
-          status: ReminderStatus.PENDING,
-        },
-        data: {
-          status: ReminderStatus.CANCELLED,
-        },
-      });
-
       return tx.appointmentSlot.update({
         where: { id: slot.id },
         data: {

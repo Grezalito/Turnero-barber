@@ -22,6 +22,7 @@ export interface ReminderEmailPayload {
   startTime: Date;
   endTime: Date;
   kind: '24h' | '2h';
+  bookingUrl?: string;
 }
 
 export interface IcsAppointmentPayload {
@@ -41,6 +42,8 @@ export interface IcsAppointmentPayload {
 export interface ConfirmationEmailPayload extends IcsAppointmentPayload {
   clientEmail?: string | null;
   barberEmail?: string | null;
+  /** Página pública de la reserva (/reserva/:id?ref=...). */
+  bookingUrl?: string;
 }
 
 @Injectable()
@@ -195,6 +198,7 @@ export class MailService {
       `IMPORTANTE: Reserva garantizada: la seña de $2.000 ARS no es reembolsable ni transferible ante cancelaciones o inasistencias.`,
       ``,
       `Adjuntamos el archivo .ics para agregar el evento a tu Apple Calendar, Outlook o Google Calendar.`,
+      ...(payload.bookingUrl ? [``, `Ver o gestionar tu turno: ${payload.bookingUrl}`] : []),
     ].join('\n');
 
     const barberSubject = `Nuevo Turno Señado (${dateStr} ${startHhMm} hs) - ${payload.clientName}`;
@@ -299,6 +303,7 @@ export class MailService {
       `Dirección: ${payload.address || 'Consultar con la barbería'}`,
       ``,
       `Recordá que la seña no es reembolsable ante inasistencias. ¡Te esperamos!`,
+      ...(payload.bookingUrl ? [``, `Ver tu turno: ${payload.bookingUrl}`] : []),
     ].join('\n');
 
     if (this.isSmtpConfigured && this.transporter) {
