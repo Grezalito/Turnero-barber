@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="es-AR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Turnazo – Turnos para barberías. Pagó, viene.</title>
+<meta name="description" content="Tus clientes reservan solos desde tu link y pagan la reserva por Mercado Pago. Sin suscripción para el barbero.">
+<meta property="og:title" content="Turnazo – Pagó. Viene.">
+<meta property="og:description" content="El turnero para barberos: reserva pagada y lugar guardado.">
+<meta property="og:type" content="website">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Hanken+Grotesk:wght@400;600;700&display=swap" rel="stylesheet">
+<script>document.documentElement.className+=' js'</script>
+<style>
+body{margin:0}*{box-sizing:border-box}.p{background:#f4f7ff;color:#0b1026;font-family:"Hanken Grotesk",system-ui,sans-serif;line-height:1.5;overflow:hidden}.w{max-width:1200px;margin:0 auto;padding:0 32px}.bf{font-family:"Bricolage Grotesque",system-ui,sans-serif;font-weight:800;letter-spacing:-.035em;margin:0}p{margin:0}.hero{background:#2342e8;color:#f4f7ff;position:relative}.big{font-size:230px;line-height:.82}.fade{display:inline-block;color:transparent;-webkit-background-clip:text;background-clip:text;background-image:linear-gradient(#f4f7ff 0 34%,transparent 34%),repeating-linear-gradient(0deg,#f4f7ff 0 5px,transparent 5px 12px);-webkit-mask-image:linear-gradient(#000 55%,transparent 98%);mask-image:linear-gradient(#000 55%,transparent 98%);padding-bottom:.06em}.stamp{position:absolute;right:48px;top:150px;width:170px;height:170px;border-radius:50%;background:#ff6b2c;color:#0b1026;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;transform:rotate(12deg);font-weight:800;line-height:1.1}.bt{display:inline-flex;align-items:center;justify-content:center;background:#ff6b2c;color:#0b1026;border-radius:999px;min-height:60px;padding:0 34px;font-weight:800;font-size:18px;text-decoration:none}.bt:focus-visible,.ln:focus-visible{outline:3px solid #0b1026;outline-offset:3px}.ln{display:inline-flex;align-items:center;min-height:56px;color:inherit;font-weight:700;text-decoration:underline;text-underline-offset:5px}.sec{padding:110px 0}.g2{display:grid;grid-template-columns:1fr 1fr;gap:56px;align-items:center}.pile{position:relative;height:420px}.bub{position:absolute;background:#fff;border:2px solid #0b1026;border-radius:18px;padding:10px 16px;font-weight:600;font-size:16px;box-shadow:4px 4px 0 #0b1026}.bub.me{background:#cfe0ff}.stairs{display:flex;align-items:flex-end;gap:0;margin-top:56px}.stp{flex:1;padding:22px 22px 18px;display:flex;flex-direction:column;justify-content:flex-end}.row{display:grid;grid-template-columns:90px 1fr 1fr;gap:24px;align-items:baseline;border-top:4px solid #0b1026;padding:30px 0}@media(max-width:860px){.big{font-size:104px}.stamp{position:static;margin:24px 0 0;width:130px;height:130px;font-size:13px}.g2{grid-template-columns:1fr}.sec{padding:64px 0}.pile{height:380px}.row{grid-template-columns:50px 1fr}.row p{grid-column:2}.stairs{flex-direction:column;align-items:stretch}.stp{height:auto!important}}
+.h2{font-size:78px}.url{font-size:112px}.hg{display:grid;grid-template-columns:1fr auto;gap:40px;align-items:end;margin-top:-30px}
+html{scroll-behavior:smooth}button:focus-visible,a:focus-visible{outline:3px solid #ff6b2c;outline-offset:3px}
+/* 1. pasada de maquina */
+@keyframes pass{from{clip-path:inset(0 0 100% 0)}to{clip-path:inset(0 0 -12% 0)}}
+h1 .fade{animation:pass 1.5s cubic-bezier(.65,0,.25,1) .3s both}
+/* 2. sello */
+@keyframes stamp{from{opacity:0;transform:scale(2.6) rotate(-14deg)}to{opacity:1;transform:scale(1) rotate(12deg)}}
+.stamp{animation:stamp .5s cubic-bezier(.2,1.3,.4,1) 1.9s both}
+/* 3. burbujas */
+.bub{transform:rotate(var(--r,0deg));transition:transform .6s cubic-bezier(.2,1.2,.4,1),opacity .3s;transition-delay:calc(var(--i,0)*.28s)}
+.js .pile:not(.in) .bub{opacity:0;transform:translateY(-80px) rotate(calc(var(--r,0deg)*2))}
+@keyframes dim{to{opacity:.4}}
+.pile.in .bub:not(.card){animation:dim .6s 2.3s forwards}
+/* 5. demo */
+.phone{width:340px;max-width:100%;margin:0 auto;background:#0b1026;color:#f4f7ff;border-radius:36px;border:6px solid #0b1026;outline:2px solid #2342e8;padding:26px 22px;min-height:520px}
+.chips{display:flex;flex-wrap:wrap;gap:8px}.chip{font:700 15px "Hanken Grotesk",sans-serif;min-height:44px;padding:0 16px;border-radius:12px;border:2px solid #2c376b;background:#1b2347;color:#f4f7ff;cursor:pointer}
+.chip[aria-pressed=true]{background:#2342e8;border-color:#2342e8}
+#go{border:0;cursor:pointer;font-family:inherit}#go:disabled{opacity:.4;cursor:not-allowed}
+@keyframes drop{from{opacity:0;transform:translateY(-36px) scale(1.12) rotate(-3deg)}to{opacity:1;transform:none}}
+.tkt{background:#f8fafc;color:#0b1026;border-radius:18px;padding:22px;border-left:14px solid #2342e8;animation:drop .55s cubic-bezier(.2,1.3,.4,1)}
+.paid{display:inline-block;margin-top:14px;background:#15803d;color:#fff;border-radius:999px;padding:5px 14px;font-weight:800;font-size:13px}
+@media(max-width:860px){.h2{font-size:44px}.url{font-size:46px}.hg{grid-template-columns:1fr;margin-top:12px;gap:24px}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}h1 .fade,.stamp,.tkt{animation:none}.bub,.pile.in .bub:not(.card){transition:none;animation:none}.js .pile:not(.in) .bub{opacity:1;transform:rotate(var(--r,0deg))}}
+</style>
+</head>
+<body>
+<!-- TODO: reemplazar [X] por los lugares libres del cupo fundador -->
+<!-- TODO: href="#" de los botones -> URL de registro de la app (ej. https://app.turnazo.com.ar/registro) -->
+<!-- TODO: enlazar Ayuda, Términos, Privacidad y Botón de arrepentimiento -->
+<div class="p">
+
+<div class="hero"><div class="w" style="padding-top:28px;padding-bottom:70px">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:40px"><div class="bf" style="font-size:34px">turnazo</div><a class="ln" href="#">Entrar</a></div>
+<div class="stamp"><div style="font-size:15px">Cupo fundador</div><div style="font-size:34px;margin:2px 0">[X]/10</div><div style="font-size:13px">lugares libres</div></div>
+<h1 class="bf big">Pagó.<br><span class="fade">Viene.</span></h1>
+<div class="hg">
+<p style="font-size:21px;max-width:560px">Turnazo es el turnero para barberos. Tu cliente reserva desde tu link, paga la reserva por Mercado Pago y su lugar queda guardado.</p>
+<div style="display:flex;flex-direction:column;align-items:flex-start;gap:6px"><a class="bt" href="#">Quiero mi link</a><span style="font-size:14px">Sin suscripción. El corte lo cobrás vos.</span><a class="ln" href="#demo">Probá cómo reserva un cliente</a></div>
+</div></div></div>
+
+<div class="sec"><div class="w g2">
+<div><h2 class="bf h2" style="line-height:.95">Contestar mensajes no es cortar pelo.</h2><p style="font-size:19px;margin-top:22px;max-width:480px;color:#3b4560">Mientras contestás uno, te escribe otro. Con tu link el cliente elige solo y vos seguís con la máquina en la mano.</p></div>
+<div class="pile">
+<div class="bub" style="left:0;top:10px;--r:-5deg;--i:0">¿Tenés para mañana?</div>
+<div class="bub" style="left:150px;top:70px;--r:4deg;--i:1">¿Y el sábado? ¿Hacés barba?</div>
+<div class="bub me" style="left:30px;top:140px;--r:-2deg;--i:2">Dale, a las 10</div>
+<div class="bub" style="left:170px;top:200px;--r:6deg;--i:3">Uh no puedo, ¿a las 11?</div>
+<div class="bub" style="left:10px;top:270px;--r:-4deg;--i:4">Ya fue, conseguí en otra</div>
+<div class="bub card" style="position:absolute;right:0;bottom:0;width:250px;background:#2342e8;color:#f4f7ff;border-radius:22px;padding:20px;--r:3deg;--i:6;box-shadow:6px 6px 0 #0b1026"><div style="font-size:13px;font-weight:700">turnazo.com.ar/tu-nombre</div><div class="bf" style="font-size:34px;line-height:1;margin-top:8px">Reservado y pagado.</div><div style="font-size:14px;margin-top:6px">Mañana 11:30 · ya está en tu agenda</div></div>
+</div></div></div>
+
+<div id="demo" style="background:#dfe8ff"><div class="w sec g2">
+<div><h2 class="bf h2" style="line-height:.95">Así reserva tu cliente. Probalo.</h2><p style="font-size:19px;margin-top:22px;max-width:460px;color:#3b4560">Elegí un día y un horario, y tocá reservar. Es una demo: no se cobra nada.</p><p style="font-size:16px;margin-top:14px;max-width:460px;color:#3b4560">En la vida real, el cliente completa nombre, DNI y WhatsApp, paga con Mercado Pago y le llega este turno.</p></div>
+<div class="phone" aria-live="polite">
+<div id="v1"><div class="bf" style="font-size:24px">Tiago Barbers</div><div style="font-size:13px;color:#b9c3e0">turnazo.com.ar/tiago-barbers</div><div style="margin:18px 0 8px;font-weight:700;font-size:14px">Día</div><div class="chips" id="days"><button type="button" class="chip" aria-pressed="true" data-d="Jue 29">Jue 29</button><button type="button" class="chip" aria-pressed="false" data-d="Vie 30">Vie 30</button><button type="button" class="chip" aria-pressed="false" data-d="Sáb 31">Sáb 31</button></div><div style="margin:18px 0 8px;font-weight:700;font-size:14px">Horario</div><div class="chips" id="slots"><button type="button" class="chip" aria-pressed="false">17:00</button><button type="button" class="chip" aria-pressed="false">17:30</button><button type="button" class="chip" aria-pressed="false">18:00</button><button type="button" class="chip" aria-pressed="false">18:30</button><button type="button" class="chip" aria-pressed="false">19:00</button><button type="button" class="chip" aria-pressed="false">19:30</button></div><button type="button" id="go" class="bt" style="width:100%;margin-top:24px" disabled>Reservar · $2.000</button></div>
+<div id="v2" hidden><div class="tkt"><div style="font-size:13px;font-weight:700;color:#4b5565">Tiago Barbers · Corte de pelo</div><div class="bf" style="font-size:58px;line-height:1;margin-top:6px">Turno <span id="tn">035</span></div><div style="font-weight:800;font-size:20px;margin-top:6px" id="tw">Jue 29 · 18:30</div><div class="paid">Reserva pagada · $2.000</div></div><p style="font-size:14px;margin:18px 0 14px;color:#b9c3e0">Así le llega a tu cliente. Y a vos te llega el aviso del turno nuevo.</p><button type="button" id="again" class="bt" style="width:100%;background:transparent;color:#f4f7ff;border:2px solid #f4f7ff">Probar de nuevo</button></div>
+</div></div></div>
+
+<div style="background:#0b1026;color:#f4f7ff"><div class="w sec">
+<h2 class="bf h2" style="line-height:.95;max-width:900px">Cada escalón del fade es plata.</h2>
+<p style="font-size:19px;margin-top:20px;max-width:620px;color:#b9c3e0">Cupo fundador: los primeros 10 barberos cobran un bono semanal según los turnos asistidos que traigan. Pagamos el escalón más alto que alcances.</p>
+<div class="stairs">
+<div class="stp" style="height:200px;background:#2342e8"><div style="font-weight:700">15 turnos</div><div class="bf" style="font-size:52px">+$10.000</div></div>
+<div class="stp" style="height:310px;background:#4a66f0"><div style="font-weight:700">35 turnos</div><div class="bf" style="font-size:52px">+$25.000</div></div>
+<div class="stp" style="height:420px;background:#ff6b2c;color:#0b1026"><div style="font-weight:700">50 turnos</div><div class="bf" style="font-size:52px">+$40.000</div></div>
+</div>
+<p style="font-size:13px;margin-top:18px;color:#b9c3e0">Por semana, por turnos asistidos. Beneficio temporal del cupo fundador, sujeto a términos.</p>
+</div></div>
+
+<div class="sec"><div class="w">
+<h2 class="bf h2" style="line-height:.95">En cinco minutos cortás con agenda.</h2>
+<div style="margin-top:56px">
+<div class="row"><div class="bf" style="font-size:56px">1</div><h3 class="bf" style="font-size:40px;line-height:1">Creás tu perfil.</h3><p style="font-size:18px;color:#3b4560">Nombre, servicios y horarios, desde el celular.</p></div>
+<div class="row"><div class="bf" style="font-size:56px">2</div><h3 class="bf" style="font-size:40px;line-height:1">Pegás tu link.</h3><p style="font-size:18px;color:#3b4560">En la bio de Instagram y en tus WhatsApp.</p></div>
+<div class="row" style="border-bottom:4px solid #0b1026"><div class="bf" style="font-size:56px">3</div><h3 class="bf" style="font-size:40px;line-height:1">Cortás.</h3><p style="font-size:18px;color:#3b4560">Cada turno llega confirmado y pagado. El resto del corte lo cobrás en el local.</p></div>
+</div></div></div>
+
+<div class="hero"><div class="w" style="padding-top:100px;padding-bottom:90px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:32px">
+<div class="bf url" style="line-height:.9;word-break:break-word">turnazo.com.ar/<span class="fade">tu-nombre</span></div>
+<p style="font-size:21px;max-width:520px">Tu link, listo hoy y sin costo.</p>
+<a class="bt" href="#">Quiero mi link</a>
+<p style="font-size:14px">Cupo fundador: quedan [X] de 10 lugares</p>
+</div></div>
+
+<div style="background:#0b1026;color:#b9c3e0"><div class="w" style="padding-top:26px;padding-bottom:30px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px;font-size:14px"><div><b class="bf" style="color:#f4f7ff;font-size:22px">turnazo</b> · Turnos para barberías</div><div><a href="#" style="color:inherit;margin-right:22px">Ayuda</a><a href="#" style="color:inherit;margin-right:22px">Términos</a><a href="#" style="color:inherit;margin-right:22px">Privacidad</a><a href="#" style="color:inherit">Botón de arrepentimiento</a></div></div></div>
+</div>
+<script>
+(function(){
+var d=document;
+var pile=d.querySelector('.pile');
+if(pile){if('IntersectionObserver' in window){var io=new IntersectionObserver(function(e){if(e[0].isIntersecting){pile.classList.add('in');io.disconnect();}},{threshold:.35});io.observe(pile);}else{pile.classList.add('in');}}
+var days=d.getElementById('days'),slots=d.getElementById('slots'),go=d.getElementById('go'),v1=d.getElementById('v1'),v2=d.getElementById('v2');
+var day='Jue 29',time=null,n=35;
+function pick(box,btn){[].forEach.call(box.querySelectorAll('.chip'),function(b){b.setAttribute('aria-pressed',b===btn?'true':'false');});}
+days.addEventListener('click',function(e){var b=e.target.closest('.chip');if(!b)return;day=b.getAttribute('data-d');pick(days,b);});
+slots.addEventListener('click',function(e){var b=e.target.closest('.chip');if(!b)return;time=b.textContent;pick(slots,b);go.disabled=false;});
+go.addEventListener('click',function(){if(!time)return;n=n%99+1;d.getElementById('tn').textContent=('00'+n).slice(-3);d.getElementById('tw').textContent=day+' \u00b7 '+time;v1.hidden=true;v2.hidden=false;var t=v2.querySelector('.tkt');t.style.animation='none';void t.offsetWidth;t.style.animation='';d.getElementById('again').focus();});
+d.getElementById('again').addEventListener('click',function(){v2.hidden=true;v1.hidden=false;time=null;go.disabled=true;pick(slots,null);go.focus();});
+})();
+</script>
+</body>
+</html>
