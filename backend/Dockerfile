@@ -1,7 +1,7 @@
 # ==============================================================================
 # STAGE 1: Builder (Dependencias + Prisma Client + NestJS Build)
 # ==============================================================================
-FROM node:20-alpine AS builder
+FROM node:24-alpine AS builder
 
 # OpenSSL requerido por el motor de Prisma en Alpine Linux
 RUN apk add --no-cache openssl libc6-compat
@@ -25,10 +25,14 @@ RUN npm run build
 # Podar dependencias de desarrollo dejando únicamente las de producción + Prisma Client generado
 RUN npm prune --omit=dev
 
+# Guardia: falla el build si el binding nativo de bcrypt no quedó instalado
+# (p. ej. si npm bloqueó su install script o no hubo binario para musl).
+RUN node -e "const b=require('bcrypt');if(!b.hashSync('x',4).startsWith('\$2b\$'))process.exit(1)"
+
 # ==============================================================================
 # STAGE 2: Production Runner (Imagen liviana y segura para Railway / Render / VPS)
 # ==============================================================================
-FROM node:20-alpine AS runner
+FROM node:24-alpine AS runner
 
 RUN apk add --no-cache openssl libc6-compat
 
