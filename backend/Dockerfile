@@ -48,4 +48,8 @@ USER node
 
 EXPOSE 3000
 
+# Liveness: GET /health (sin DB). start-period cubre `prisma migrate deploy` del arranque.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+  CMD wget -qO- "http://127.0.0.1:${PORT}/health" >/dev/null || exit 1
+
 CMD ["npm", "run", "start:prod"]
