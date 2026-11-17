@@ -1,16 +1,24 @@
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { json, urlencoded } from 'express';
+import { NextFunction, Request, Response, json, urlencoded } from 'express';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { resolveJwtSecret } from './auth/jwt-secret.util';
+import { resolveSuperAdminCredentials } from './auth/superadmin-credentials.util';
+import { DOCS_PATH, isDocsEnabled, isDocsPath } from './docs/docs.config';
+import { SecurityHeadersMiddleware } from './security/security-headers.middleware';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
 
-  // Fail-fast: sin JWT_SECRET robusto la API no arranca (no existe secret por defecto).
+  // Fail-fast: sin JWT_SECRET robusto, sin credenciales de SuperAdmin o con DOCS_ENABLED
+  // inválido la API no arranca (no existen valores por defecto).
+  let docsEnabled = false;
   try {
     resolveJwtSecret(process.env.JWT_SECRET);
+    resolveSuperAdminCredentials(process.env);
+    docsEnabled = isDocsEnabled(process.env);
   } catch (err) {
     logger.error(`[SECURITY_AUDIT] event=STARTUP_ABORTED reason=${(err as Error).message}`);
     process.exit(1);
@@ -97,6 +105,31 @@ async function bootstrap() {
   );
 
   app.enableShutdownHooks();
+
+  // Documentación OpenAPI en /docs (DOCS_ENABLED; apagada por defecto en producción).
+  if (docsEnabled) {
+    // SwaggerModule registra sus rutas directo en Express, antes que el middleware de Nest
+    // (que se monta en app.init), así que las cabeceras de seguridad (incluida la CSP
+    // relajada solo para /docs*) se aplican explícitamente a esas rutas antes del setup.
+    const docsSecurityHeaders = new SecurityHeadersMiddleware();
+    app.use((req: Request, res: Response, next: NextFunction) =>
+      isDocsPath(req.originalUrl || req.url)
+        ? docsSecurityHeaders.use(req, res, next)
+        : next(),
+    );
+
+    const swaggerConfig = new DocumentBuilder()
+      .setTitle('Turnazo API')
+      .setVersion('1.0.0')
+      .addBearerAuth()
+      .build();
+    SwaggerModule.setup(
+      DOCS_PATH,
+      app,
+      SwaggerModule.createDocument(app, swaggerConfig),
+    );
+    logger.log(`📚 Documentación OpenAPI habilitada en /${DOCS_PATH}`);
+  }
 
   const port = process.env.PORT || 3000;
   await app.listen(port);

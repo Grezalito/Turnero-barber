@@ -1,26 +1,13 @@
 import { PrismaClient, Role, SlotStatus } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import { resolveSuperAdminCredentials } from '../src/auth/superadmin-credentials.util';
 
 const prisma = new PrismaClient();
 
 async function main() {
-  const superAdminDni = (process.env.SUPERADMIN_DNI || '').trim();
-  const superAdminRawPassword = process.env.SUPERADMIN_PASSWORD || '';
-  const missing = [
-    !superAdminDni && 'SUPERADMIN_DNI',
-    !superAdminRawPassword && 'SUPERADMIN_PASSWORD',
-  ].filter(Boolean);
-  if (missing.length > 0) {
-    throw new Error(
-      `Faltan variables de entorno obligatorias para el seed: ${missing.join(', ')}. ` +
-        'Definilas en backend/.env (ver backend/.env.example). No hay valores por defecto.',
-    );
-  }
-  if (/^CAMBIAR_/i.test(superAdminRawPassword)) {
-    throw new Error(
-      'SUPERADMIN_PASSWORD todavía tiene el placeholder de .env.example. Definí una contraseña real en backend/.env.',
-    );
-  }
+  // Sin valores por defecto: falla con un mensaje claro si faltan o son el placeholder.
+  const { dni: superAdminDni, password: superAdminRawPassword } =
+    resolveSuperAdminCredentials(process.env);
   const hashedAdminPassword = await bcrypt.hash(superAdminRawPassword, 10);
 
   const superAdmin = await prisma.user.upsert({

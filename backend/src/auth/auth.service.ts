@@ -16,6 +16,7 @@ import {
 } from '../security/pii-sanitizer.util';
 import { LoginDto } from './dto/login.dto';
 import { RegisterClientDto } from './dto/register.dto';
+import { resolveSuperAdminCredentials } from './superadmin-credentials.util';
 
 // Hash bcrypt precalculado para igualar tiempos de cómputo cuando el DNI no existe (Mitigación de Timing Side-Channel - ISO 27001 A.8.5)
 const TIMING_SAFE_DUMMY_BCRYPT_HASH =
@@ -65,15 +66,12 @@ export class AuthService {
 
   async login(dto: LoginDto) {
     const cleanDni = dto.dni.replace(/\D/g, '');
-    const isProd = (process.env.NODE_ENV || '').toLowerCase() === 'production';
-    const superAdminDni = (
-      process.env.SUPERADMIN_DNI || (isProd ? '' : '00000000')
-    ).trim();
-    const superAdminPassword =
-      process.env.SUPERADMIN_PASSWORD || (isProd ? '' : 'adminPassword123!');
+    // Sin respaldo en ningún entorno: si faltan las variables lanza un error claro
+    // (el arranque ya aborta en main.ts; esto cubre instancias creadas sin bootstrap).
+    const { dni: superAdminDni, password: superAdminPassword } =
+      resolveSuperAdminCredentials(process.env);
 
     const isSuperAdminMatch =
-      Boolean(superAdminDni && superAdminPassword) &&
       this.timingSafeStringEqual(cleanDni, superAdminDni) &&
       this.timingSafeStringEqual(dto.password, superAdminPassword);
 
