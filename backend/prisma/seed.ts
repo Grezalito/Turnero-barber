@@ -4,9 +4,23 @@ import * as bcrypt from 'bcrypt';
 const prisma = new PrismaClient();
 
 async function main() {
-  const superAdminDni = process.env.SUPERADMIN_DNI || '00000000';
-  const superAdminRawPassword =
-    process.env.SUPERADMIN_PASSWORD || 'adminPassword123!';
+  const superAdminDni = (process.env.SUPERADMIN_DNI || '').trim();
+  const superAdminRawPassword = process.env.SUPERADMIN_PASSWORD || '';
+  const missing = [
+    !superAdminDni && 'SUPERADMIN_DNI',
+    !superAdminRawPassword && 'SUPERADMIN_PASSWORD',
+  ].filter(Boolean);
+  if (missing.length > 0) {
+    throw new Error(
+      `Faltan variables de entorno obligatorias para el seed: ${missing.join(', ')}. ` +
+        'Definilas en backend/.env (ver backend/.env.example). No hay valores por defecto.',
+    );
+  }
+  if (/^CAMBIAR_/i.test(superAdminRawPassword)) {
+    throw new Error(
+      'SUPERADMIN_PASSWORD todavía tiene el placeholder de .env.example. Definí una contraseña real en backend/.env.',
+    );
+  }
   const hashedAdminPassword = await bcrypt.hash(superAdminRawPassword, 10);
 
   const superAdmin = await prisma.user.upsert({
