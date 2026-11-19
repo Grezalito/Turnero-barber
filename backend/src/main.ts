@@ -7,6 +7,7 @@ import { AppModule } from './app.module';
 import { resolveJwtSecret } from './auth/jwt-secret.util';
 import { resolveSuperAdminCredentials } from './auth/superadmin-credentials.util';
 import { DOCS_PATH, isDocsEnabled, isDocsPath } from './docs/docs.config';
+import { isMetricsEnabled } from './metrics/metrics.config';
 import { SecurityHeadersMiddleware } from './security/security-headers.middleware';
 
 async function bootstrap() {
@@ -19,6 +20,7 @@ async function bootstrap() {
     resolveJwtSecret(process.env.JWT_SECRET);
     resolveSuperAdminCredentials(process.env);
     docsEnabled = isDocsEnabled(process.env);
+    isMetricsEnabled(process.env); // valida METRICS_ENABLED: un typo aborta el arranque
   } catch (err) {
     logger.error(`[SECURITY_AUDIT] event=STARTUP_ABORTED reason=${(err as Error).message}`);
     process.exit(1);

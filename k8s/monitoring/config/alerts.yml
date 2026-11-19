@@ -1,0 +1,51 @@
+# Reglas de alerta. Cada una se evalúa cada 15s; si la condición se mantiene durante
+# "for", pasa a "firing" y Alertmanager manda la notificación.
+groups:
+  - name: turnazo-backend
+    rules:
+      # OJO: no alcanza con "up == 0". Si el pod se borra, la serie "up" desaparece
+      # (no vale 0) y esa alerta nunca dispararía. "absent(up == 1)" cubre los dos
+      # casos: scrape fallando Y ningún pod sano.
+      - alert: TurnazoBackendDown
+        expr: absent(up{job="turnazo-backend"} == 1)
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "El backend de Turnazo está caído"
+          description: "Prometheus no logra leer /metrics de ningún pod del backend hace más de 1 minuto."
+
+      - alert: TurnazoHighErrorRate
+        expr: |
+          sum(rate(turnazo_http_requests_total{status_code=~"5.."}[5m]))
+            /
+          sum(rate(turnazo_http_requests_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Más del 5% de los requests terminan en error 5xx"
+          description: "Tasa de errores 5xx de los últimos 5 minutos: {{ $value | humanizePercentage }}."
+
+      - alert: TurnazoHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(turnazo_http_request_duration_seconds_bucket[5m]))
+          ) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "El 5% de requests más lentos tarda más de 1 segundo"
+          description: "Latencia p95 de los últimos 5 minutos: {{ $value | humanizeDuration }}."
+
+      # El límite del contenedor es 512Mi (k8s/backend.yaml): al pasarlo, Kubernetes
+      # lo mata (OOMKilled). Esta alerta avisa antes, con 400MB sostenidos.
+      - alert: TurnazoHighMemory
+        expr: turnazo_process_resident_memory_bytes{job="turnazo-backend"} > 400 * 1024 * 1024
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "El backend usa más de 400MB de memoria"
+          description: "Pod {{ $labels.pod }}: {{ $value | humanize1024 }}B de memoria residente (límite del contenedor: 512Mi)."
