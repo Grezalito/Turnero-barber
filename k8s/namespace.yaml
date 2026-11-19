@@ -1,0 +1,6 @@
+# Un namespace es una "carpeta" dentro del cluster: aísla los recursos de
+# Turnazo del resto y permite borrarlos todos juntos.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: turnazo

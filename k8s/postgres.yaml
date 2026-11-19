@@ -1,0 +1,89 @@
+# ==============================================================================
+# PostgreSQL dentro del cluster.
+#
+# Se usa un StatefulSet (no un Deployment) porque una base de datos necesita
+# identidad estable y su propio disco persistente: si el pod se reinicia,
+# vuelve a montar el mismo volumen y no se pierden los datos.
+# ==============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels:
+    app.kubernetes.io/name: postgres
+spec:
+  # Service "headless": sólo da un nombre DNS estable ("postgres") dentro del cluster.
+  # No se expone hacia afuera.
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  labels:
+    app.kubernetes.io/name: postgres
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:17-alpine
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: turnazo
+            - name: POSTGRES_USER
+              value: turnazo
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: turnazo-secrets
+                  key: POSTGRES_PASSWORD
+            # Subcarpeta: el volumen trae un "lost+found" que Postgres no tolera en la raíz.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          # Listo para recibir conexiones sólo cuando pg_isready responde.
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "turnazo", "-d", "turnazo"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "turnazo", "-d", "turnazo"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+  # Cada réplica recibe su propio disco (en k3s lo crea el provisioner "local-path").
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi

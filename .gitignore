@@ -22,3 +22,6 @@ build/
 npm-debug.log*
 *.log
 graphify-out/
+
+# Secretos del cluster local de Kubernetes (ya cubierto por *.env, explícito por claridad)
+k8s/secrets.env
