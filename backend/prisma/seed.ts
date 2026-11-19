@@ -1,12 +1,13 @@
 import { PrismaClient, Role, SlotStatus } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import { resolveSuperAdminCredentials } from '../src/auth/superadmin-credentials.util';
 
 const prisma = new PrismaClient();
 
 async function main() {
-  const superAdminDni = process.env.SUPERADMIN_DNI || '00000000';
-  const superAdminRawPassword =
-    process.env.SUPERADMIN_PASSWORD || 'adminPassword123!';
+  // Sin valores por defecto: falla con un mensaje claro si faltan o son el placeholder.
+  const { dni: superAdminDni, password: superAdminRawPassword } =
+    resolveSuperAdminCredentials(process.env);
   const hashedAdminPassword = await bcrypt.hash(superAdminRawPassword, 10);
 
   const superAdmin = await prisma.user.upsert({

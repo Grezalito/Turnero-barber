@@ -1,6 +1,12 @@
 import { Injectable, NestMiddleware } from '@nestjs/common';
 import * as crypto from 'crypto';
 import { NextFunction, Request, Response } from 'express';
+import {
+  API_CSP,
+  DOCS_CSP,
+  isDocsEnabled,
+  isDocsPath,
+} from '../docs/docs.config';
 import { sanitizeControlChars } from './pii-sanitizer.util';
 
 /**
@@ -41,13 +47,13 @@ export class SecurityHeadersMiddleware implements NestMiddleware {
       'Permissions-Policy',
       'camera=(), microphone=(), geolocation=(), usb=(), payment=(self "https://*.mercadopago.com" "https://*.mercadopago.com.ar")',
     );
-    res.setHeader(
-      'Content-Security-Policy',
-      "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
-    );
-
     // Evitar almacenamiento en caché de respuestas con PII, credenciales o pagos (ISO 27701)
     const path = req.originalUrl || req.url || '';
+
+    // CSP estricta para toda la API; relajada únicamente para Swagger UI (/docs*) y solo
+    // si está habilitado (deshabilitado, /docs es un 404 más y lleva la CSP estricta).
+    const relaxForDocs = isDocsPath(path) && isDocsEnabled(process.env);
+    res.setHeader('Content-Security-Policy', relaxForDocs ? DOCS_CSP : API_CSP);
     if (
       path.startsWith('/auth') ||
       path.startsWith('/admin') ||

@@ -4,6 +4,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { AdminModule } from './admin/admin.module';
 import { AppointmentsModule } from './appointments/appointments.module';
 import { AuthModule } from './auth/auth.module';
+import { HealthController } from './health/health.controller';
 import { MailModule } from './mail/mail.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { PaymentsModule } from './payments/payments.module';
@@ -26,5 +27,6 @@ import { SecurityModule } from './security/security.module';
     PaymentsModule,
     NotificationsModule,
   ],
+  controllers: [HealthController],
 })
 export class AppModule {}

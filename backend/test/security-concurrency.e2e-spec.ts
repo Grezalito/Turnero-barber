@@ -19,6 +19,8 @@ if (!E2E_DB || !/@127\.0\.0\.1:\d+\//.test(E2E_DB)) {
 process.env.DATABASE_URL = E2E_DB;
 process.env.NODE_ENV = 'development';
 process.env.JWT_SECRET = 'e2e-only-jwt-secret-0123456789-abcdefghijklmnop';
+process.env.SUPERADMIN_DNI = '90000099';
+process.env.SUPERADMIN_PASSWORD = 'e2e-only-superadmin-password';
 process.env.MP_WEBHOOK_SECRET = 'e2e-webhook-secret-123';
 process.env.MP_ACCESS_TOKEN = 'TEST-e2e-fake-token-not-real';
 process.env.SMTP_HOST = '';
@@ -251,6 +253,32 @@ describe('0. Arranque (fail-fast JWT_SECRET)', () => {
       `exit ${missing.status} / ${short.status}`,
     );
   }, 60_000);
+
+  test('la API no arranca sin credenciales de SuperAdmin (sin respaldo, cualquier NODE_ENV)', () => {
+    const backendDir = path.resolve(__dirname, '..');
+    const run = (nodeEnv: string) =>
+      spawnSync(process.execPath, ['-r', 'ts-node/register/transpile-only', 'src/main.ts'], {
+        cwd: backendDir,
+        // Vacías (no ausentes) para que backend/.env no las complete.
+        env: { ...process.env, NODE_ENV: nodeEnv, SUPERADMIN_DNI: '', SUPERADMIN_PASSWORD: '', PORT: '0' },
+        encoding: 'utf8',
+        timeout: 45_000,
+      });
+    const dev = run('development');
+    const prod = run('production');
+    const out = (r: ReturnType<typeof run>) => r.stdout + r.stderr;
+    const ok = (r: ReturnType<typeof run>) =>
+      r.status === 1 &&
+      /STARTUP_ABORTED/.test(out(r)) &&
+      /SUPERADMIN_DNI, SUPERADMIN_PASSWORD/.test(out(r));
+    check(
+      '0. Arranque',
+      'Fail-fast sin SUPERADMIN_DNI / SUPERADMIN_PASSWORD (dev y prod)',
+      ok(dev) && ok(prod),
+      `exit ${dev.status} / ${prod.status}`,
+    );
+    expect(ok(dev) && ok(prod)).toBe(true);
+  }, 90_000);
 });
 
 // ───────────────────────── 1. WEBHOOKS ─────────────────────────
