@@ -1,0 +1,10 @@
+# Provisioning: le dice a Grafana que cargue todos los dashboards JSON de esta carpeta.
+apiVersion: 1
+providers:
+  - name: turnazo
+    folder: Turnazo
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards

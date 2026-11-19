@@ -4,8 +4,10 @@
 # Qué hace en cada push / pull request:
 #   1. Job "test":   instala dependencias, corre los tests unitarios y e2e
 #                    y compila la app. Si algo falla, el pipeline queda en rojo.
-#   2. Job "k8s-manifests": valida los manifiestos de k8s/ contra el esquema de
-#                    Kubernetes (en paralelo con "test").
+#   2. Job "k8s-manifests": valida los manifiestos de k8s/ y k8s/monitoring/ contra
+#                    el esquema de Kubernetes, chequea las configs de Prometheus y
+#                    Alertmanager y corre los tests de las reglas de alerta
+#                    (en paralelo con "test").
 #   3. Job "docker": sólo si "test" pasó, construye la imagen Docker de producción
 #                    para asegurar que el Dockerfile sigue funcionando.
 #
@@ -71,21 +73,48 @@ jobs:
       - name: Descargar el código
         uses: actions/checkout@v4
 
-      # El Secret se genera desde k8s/secrets.env, que no está en git:
-      # en CI usamos la plantilla con valores falsos sólo para poder renderizar.
+      # Los Secrets se generan desde archivos .env que no están en git:
+      # en CI usamos las plantillas con valores falsos sólo para poder renderizar.
       - name: Renderizar con kustomize (kubectl ya viene en el runner)
         run: |
           cp k8s/secrets.env.example k8s/secrets.env
+          cp k8s/monitoring/secrets.env.example k8s/monitoring/secrets.env
           kubectl kustomize k8s > rendered.yaml
-          echo "Recursos generados:"
+          kubectl kustomize k8s/monitoring > rendered-monitoring.yaml
+          echo "Recursos generados (app):"
           grep -E '^kind:' rendered.yaml | sort | uniq -c
+          echo "Recursos generados (monitoreo):"
+          grep -E '^kind:' rendered-monitoring.yaml | sort | uniq -c
 
       # kubeconform valida cada recurso contra el esquema oficial de Kubernetes
       # (campos mal escritos, tipos incorrectos, etc.) sin necesitar un cluster.
       - name: Validar contra el esquema de Kubernetes (kubeconform)
         run: |
           curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz | tar xz kubeconform
-          ./kubeconform -strict -summary rendered.yaml
+          ./kubeconform -strict -summary rendered.yaml rendered-monitoring.yaml
+
+      # promtool / amtool vienen dentro de las imágenes oficiales: usamos las MISMAS
+      # versiones que despliega k8s/monitoring/, así lo que valida CI es lo que corre.
+      - name: Validar config y reglas de Prometheus (promtool)
+        run: |
+          docker run --rm -v "$PWD/k8s/monitoring/config:/etc/prometheus:ro" \
+            --entrypoint promtool prom/prometheus:v2.55.1 \
+            check config /etc/prometheus/prometheus.yml
+
+      - name: Testear las alertas (promtool test rules)
+        run: |
+          docker run --rm -v "$PWD/k8s/monitoring/config:/etc/prometheus:ro" -w /etc/prometheus \
+            --entrypoint promtool prom/prometheus:v2.55.1 \
+            test rules alerts.test.yml
+
+      - name: Validar config de Alertmanager (amtool)
+        run: |
+          mkdir -p /tmp/am-secrets && echo "token-falso" > /tmp/am-secrets/TELEGRAM_BOT_TOKEN
+          docker run --rm \
+            -v "$PWD/k8s/monitoring/config/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro" \
+            -v /tmp/am-secrets:/etc/alertmanager/secrets:ro \
+            --entrypoint amtool prom/alertmanager:v0.27.0 \
+            check-config /etc/alertmanager/alertmanager.yml
 
   docker:
     name: Build de imagen Docker

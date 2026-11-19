@@ -98,6 +98,7 @@ Completá `backend/.env`. Todos los valores de `.env.example` son falsos. Alguna
 | `SUPERADMIN_DNI`, `SUPERADMIN_PASSWORD` | **Obligatorias en cualquier entorno.** La API y el seed fallan si faltan o si la contraseña sigue siendo el placeholder `CAMBIAR_…`. No hay valores por defecto (`src/auth/superadmin-credentials.util.ts`). |
 | `FRONTEND_URL` | Orígenes permitidos por CORS (separados por coma). El primero se usa para armar links. En producción, si no se define, se bloquea cualquier origen de navegador. |
 | `DOCS_ENABLED` | Vacía: `/docs` está encendido fuera de producción y apagado con `NODE_ENV=production`. `true`/`false` lo fuerzan. Cualquier otro valor aborta el arranque. |
+| `METRICS_ENABLED` | Vacía: `GET /metrics` (formato Prometheus) está encendido fuera de producción y apagado con `NODE_ENV=production`. `true`/`false` lo fuerzan. Cualquier otro valor aborta el arranque. No tiene autenticación: en producción dejalo apagado salvo que el puerto no sea público. |
 | `MP_ACCESS_TOKEN` | El valor de ejemplo `…CENTRAL-PLATFORM-TOKEN` activa el modo simulado de pagos. |
 | `MP_WEBHOOK_SECRET` | Vacía: todos los webhooks se rechazan por firma inválida. |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | Vacías: el canal push queda deshabilitado. Generar con `npx web-push generate-vapid-keys`. |

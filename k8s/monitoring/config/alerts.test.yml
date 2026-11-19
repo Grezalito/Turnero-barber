@@ -1,0 +1,75 @@
+# Tests de las reglas de alerta: promtool simula series de tiempo y verifica qué
+# alertas disparan. Se corre con:  promtool test rules k8s/monitoring/config/alerts.test.yml
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 15s
+
+tests:
+  # Caso clave: el pod se borra y la serie "up" DESAPARECE (no pasa a 0).
+  # Una regla "up == 0" no dispararía nunca; "absent(up == 1)" sí.
+  - interval: 15s
+    input_series:
+      - series: 'up{job="turnazo-backend", pod="backend-abc"}'
+        values: "1x20 stale _x39"    # 5 min sano; después Prometheus marca la serie como "stale" (pod borrado)
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: TurnazoBackendDown
+        exp_alerts: []                # sano: no alerta
+      - eval_time: 8m
+        alertname: TurnazoBackendDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "El backend de Turnazo está caído"
+              description: "Prometheus no logra leer /metrics de ningún pod del backend hace más de 1 minuto."
+
+  # Scrape fallando (el pod existe pero no responde): up = 0.
+  - interval: 15s
+    input_series:
+      - series: 'up{job="turnazo-backend", pod="backend-abc"}'
+        values: "0x40"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: TurnazoBackendDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "El backend de Turnazo está caído"
+              description: "Prometheus no logra leer /metrics de ningún pod del backend hace más de 1 minuto."
+
+  # 10% de los requests son 5xx durante más de 5 minutos.
+  - interval: 15s
+    input_series:
+      - series: 'turnazo_http_requests_total{status_code="200", route="/x"}'
+        values: "0+90x80"
+      - series: 'turnazo_http_requests_total{status_code="500", route="/x"}'
+        values: "0+10x80"
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: TurnazoHighErrorRate
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "Más del 5% de los requests terminan en error 5xx"
+              description: "Tasa de errores 5xx de los últimos 5 minutos: 10%."
+
+  # Memoria por encima de 400MB sostenida.
+  - interval: 15s
+    input_series:
+      - series: 'turnazo_process_resident_memory_bytes{job="turnazo-backend", pod="backend-abc"}'
+        values: "450000000x60"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: TurnazoHighMemory
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: turnazo-backend
+              pod: backend-abc
+            exp_annotations:
+              summary: "El backend usa más de 400MB de memoria"
+              description: "Pod backend-abc: 429.2MiB de memoria residente (límite del contenedor: 512Mi)."

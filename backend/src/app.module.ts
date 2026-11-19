@@ -6,6 +6,7 @@ import { AppointmentsModule } from './appointments/appointments.module';
 import { AuthModule } from './auth/auth.module';
 import { HealthController } from './health/health.controller';
 import { MailModule } from './mail/mail.module';
+import { MetricsModule } from './metrics/metrics.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { PaymentsModule } from './payments/payments.module';
 import { PrismaModule } from './prisma/prisma.module';
@@ -20,6 +21,7 @@ import { SecurityModule } from './security/security.module';
     ScheduleModule.forRoot(),
     PrismaModule,
     SecurityModule,
+    MetricsModule,
     MailModule,
     AuthModule,
     AdminModule,

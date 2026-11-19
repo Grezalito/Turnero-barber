@@ -77,6 +77,11 @@ docker build -t turnazo-backend:local backend
 kubectl rollout restart -n turnazo deploy/backend
 ```
 
+## Monitoreo
+
+Prometheus + Alertmanager + Grafana, con dashboard y alertas de caída por Telegram,
+viven en [`monitoring/`](monitoring/README.md) y se despliegan aparte.
+
 ## Borrar todo
 
 ```bash

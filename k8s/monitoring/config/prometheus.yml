@@ -1,0 +1,38 @@
+# Configuración de Prometheus: a quién le pide métricas y dónde están las reglas de alerta.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  # Prometheus se mide a sí mismo.
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Backend de Turnazo. En vez de una IP fija (los pods cambian de IP al reiniciarse),
+  # Prometheus le pregunta a la API de Kubernetes qué pods existen en el namespace
+  # "turnazo" y se queda sólo con el del backend.
+  - job_name: turnazo-backend
+    metrics_path: /metrics
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: ["turnazo"]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+        regex: backend
+        action: keep
+      # Sólo el puerto "http" del contenedor (el pod podría tener otros).
+      - source_labels: [__meta_kubernetes_pod_container_port_name]
+        regex: http
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod

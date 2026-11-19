@@ -1,0 +1,50 @@
+# ==============================================================================
+# Stack de monitoreo de Turnazo: Prometheus + Alertmanager + Grafana.
+#
+#   kubectl apply -k k8s/monitoring/     -> crea/actualiza todo
+#   kubectl delete -k k8s/monitoring/    -> borra todo (incluido el historial)
+#
+# Es independiente de k8s/ (la app): se despliega en su propio namespace.
+# ==============================================================================
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: monitoring
+
+resources:
+  - namespace.yaml
+  - prometheus.yaml
+  - alertmanager.yaml
+  - grafana.yaml
+
+# Los archivos de config viven como archivos reales (resaltado de sintaxis, y se
+# pueden validar con promtool) y kustomize los convierte en ConfigMaps. Si cambiás
+# un archivo, el nombre del ConfigMap cambia y los pods se reinician solos.
+configMapGenerator:
+  - name: prometheus-config
+    files:
+      - prometheus.yml=config/prometheus.yml
+      - alerts.yml=config/alerts.yml
+  - name: alertmanager-config
+    files:
+      - alertmanager.yml=config/alertmanager.yml
+  - name: grafana-datasource
+    files:
+      - datasource.yml=config/grafana-datasource.yml
+  - name: grafana-dashboard-provider
+    files:
+      - dashboards.yml=config/grafana-dashboards.yml
+  - name: grafana-dashboards
+    files:
+      - turnazo-backend.json=dashboards/turnazo-backend.json
+
+# Secretos (contraseña de Grafana, token de Telegram) desde un archivo local
+# que NO se sube a git. Copiá secrets.env.example a secrets.env.
+secretGenerator:
+  - name: monitoring-secrets
+    envs:
+      - secrets.env
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: turnazo-monitoring

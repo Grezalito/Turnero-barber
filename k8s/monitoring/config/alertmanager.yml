@@ -1,0 +1,25 @@
+# Alertmanager recibe las alertas de Prometheus, las agrupa y las manda por Telegram.
+#
+# ANTES DE USARLO:
+#   1. Creá un bot con @BotFather en Telegram y guardá su token en monitoring/secrets.env.
+#   2. Escribile algo al bot y obtené tu chat_id (https://api.telegram.org/bot<TOKEN>/getUpdates).
+#   3. Reemplazá el chat_id de abajo (no es un secreto, por eso va acá y no en el Secret).
+route:
+  receiver: telegram
+  group_by: [alertname]
+  group_wait: 10s        # espera un poco para juntar alertas relacionadas
+  group_interval: 5m
+  repeat_interval: 4h    # si sigue rota, recuerda cada 4 horas
+
+receivers:
+  - name: telegram
+    telegram_configs:
+      - bot_token_file: /etc/alertmanager/secrets/TELEGRAM_BOT_TOKEN
+        chat_id: 123456789   # <-- REEMPLAZAR por tu chat_id
+        send_resolved: true  # avisa también cuando el problema se arregla
+        parse_mode: ""       # texto plano (evita errores por caracteres especiales)
+        message: |-
+          [{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}
+          {{ range .Alerts }}{{ .Annotations.summary }}
+          {{ .Annotations.description }}
+          {{ end }}

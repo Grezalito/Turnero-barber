@@ -1,0 +1,6 @@
+# Namespace aparte para el monitoreo: se puede borrar (kubectl delete -k k8s/monitoring/)
+# sin tocar la aplicación.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
