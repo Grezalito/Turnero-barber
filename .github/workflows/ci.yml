@@ -1,0 +1,83 @@
+# ==============================================================================
+# CI de Turnazo (backend NestJS + Prisma)
+#
+# Qué hace en cada push / pull request:
+#   1. Job "test":   instala dependencias, corre los tests unitarios y e2e
+#                    y compila la app. Si algo falla, el pipeline queda en rojo.
+#   2. Job "docker": sólo si "test" pasó, construye la imagen Docker de producción
+#                    para asegurar que el Dockerfile sigue funcionando.
+#
+# Los tests e2e levantan su propio PostgreSQL en memoria (PGlite), así que no
+# hace falta ninguna base de datos ni secretos en GitHub.
+# ==============================================================================
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: # permite correrlo a mano desde la pestaña "Actions"
+
+# Si subís dos commits seguidos a la misma rama, cancela la corrida vieja.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Principio de mínimo privilegio: el workflow sólo puede leer el repo.
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests y build (backend)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@v4
+
+      - name: Instalar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Instalar dependencias (npm ci + prisma generate)
+        run: npm ci --no-audit --no-fund
+
+      - name: Tests unitarios
+        run: npm test -- --ci
+
+      - name: Tests e2e (PostgreSQL en memoria con PGlite)
+        run: npm run test:e2e -- --ci
+
+      - name: Compilar (nest build)
+        run: npm run build
+
+  docker:
+    name: Build de imagen Docker
+    runs-on: ubuntu-latest
+    needs: test # no se ejecuta si fallaron los tests
+    timeout-minutes: 20
+
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@v4
+
+      - name: Preparar Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Construir imagen (sin publicarla)
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          push: false
+          tags: turnazo-backend:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
