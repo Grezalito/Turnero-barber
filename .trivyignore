@@ -1,0 +1,3 @@
+# Excepciones del escaneo de Trivy (una por línea: el ID de la vulnerabilidad, ej. CVE-2025-12345).
+# Sumá un ID sólo si evaluaste que NO te afecta, y dejá siempre un comentario con el motivo
+# y la fecha. Una excepción sin justificación es una vulnerabilidad escondida.

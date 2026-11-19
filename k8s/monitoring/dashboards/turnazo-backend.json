@@ -117,8 +117,8 @@
     },
     {
       "id": 3,
-      "title": "Reinicios del proceso (uptime)",
-      "type": "timeseries",
+      "title": "Tiempo activo del backend (uptime)",
+      "type": "stat",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -132,20 +132,47 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "turnazo_process_start_time_seconds{job=\"turnazo-backend\"}*1000",
-          "legendFormat": "inicio {{pod}}",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
-          }
+          },
+          "expr": "time() - turnazo_process_start_time_seconds{job=\"turnazo-backend\"}",
+          "legendFormat": "{{pod}}"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "dateTimeAsIso"
+          "unit": "s",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "orange",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 300
+              }
+            ]
+          }
         },
         "overrides": []
-      }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "description": "Segundos desde que arrancó el proceso. Naranja = menos de 5 minutos (se reinició hace poco)."
     },
     {
       "id": 4,
@@ -196,7 +223,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rate(turnazo_http_requests_total{status_code=~\"5..\"}[5m])) / sum(rate(turnazo_http_requests_total[5m]))",
+          "expr": "(sum(rate(turnazo_http_requests_total{status_code=~\"5..\"}[5m])) or vector(0)) / sum(rate(turnazo_http_requests_total[5m]))",
           "legendFormat": "5xx",
           "datasource": {
             "type": "prometheus",
@@ -210,7 +237,8 @@
           "min": 0
         },
         "overrides": []
-      }
+      },
+      "description": "Muestra 0% cuando hay tráfico sin errores. Sin ningún request en los últimos 5 minutos no hay dato (no se puede dividir por cero)."
     },
     {
       "id": 6,
