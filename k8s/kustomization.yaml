@@ -1,0 +1,29 @@
+# ==============================================================================
+# Punto de entrada de los manifiestos de Kubernetes de Turnazo.
+#
+#   kubectl apply -k k8s/      -> crea/actualiza todo
+#   kubectl delete -k k8s/     -> borra todo (el volumen de Postgres también)
+#
+# Kustomize viene integrado en kubectl: junta los archivos de "resources",
+# les pone el namespace y genera el Secret a partir de secrets.env.
+# ==============================================================================
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: turnazo
+
+resources:
+  - namespace.yaml
+  - postgres.yaml
+  - backend.yaml
+
+# El Secret se genera desde un archivo local que NO se sube a git (ver .gitignore).
+# Copiá secrets.env.example a secrets.env y completalo antes del primer apply.
+secretGenerator:
+  - name: turnazo-secrets
+    envs:
+      - secrets.env
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: turnazo

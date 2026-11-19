@@ -1,0 +1,118 @@
+# ==============================================================================
+# Backend NestJS de Turnazo.
+#
+# Deployment = "quiero N copias de este contenedor corriendo siempre".
+# Si el contenedor se cae o deja de responder en /health, Kubernetes lo
+# reinicia solo. Esa es la "auto-recuperación" que vamos a demostrar.
+# ==============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  labels:
+    app.kubernetes.io/name: backend
+spec:
+  # 1 réplica a propósito: los cron jobs (limpieza de locks, recordatorios) y el
+  # rate limit viven en memoria del proceso; con 2+ réplicas se duplicarían.
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: backend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: backend
+    spec:
+      # Misma idea que "USER node" del Dockerfile: nunca correr como root.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+      containers:
+        - name: backend
+          # Imagen construida localmente con "docker build" dentro de Rancher Desktop.
+          # "Never" = no intentar bajarla de un registry: tiene que existir en el nodo.
+          image: turnazo-backend:local
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: PORT
+              value: "3000"
+            - name: FRONTEND_URL
+              value: http://localhost:5173
+            # Token "CENTRAL-PLATFORM-TOKEN" = modo simulado de Mercado Pago (no cobra nada).
+            - name: MP_ACCESS_TOKEN
+              value: APP_USR-CENTRAL-PLATFORM-TOKEN
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: turnazo-secrets
+                  key: POSTGRES_PASSWORD
+            # $(POSTGRES_PASSWORD) lo reemplaza Kubernetes con la variable de arriba.
+            # "postgres" es el nombre DNS del Service de postgres.yaml.
+            - name: DATABASE_URL
+              value: postgresql://turnazo:$(POSTGRES_PASSWORD)@postgres:5432/turnazo?schema=public
+          # El resto (JWT_SECRET, MP_WEBHOOK_SECRET, SUPERADMIN_*) sale del Secret.
+          envFrom:
+            - secretRef:
+                name: turnazo-secrets
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+
+          # --- Probes: cómo sabe Kubernetes si el contenedor está sano --------------
+          # startupProbe: margen para el arranque (incluye "prisma migrate deploy").
+          #   Hasta 30 x 5s = 150s. Mientras no pase, las otras dos no se evalúan.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          # livenessProbe: si falla 3 veces seguidas, Kubernetes REINICIA el contenedor.
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # readinessProbe: si falla, el pod deja de recibir tráfico (sin reiniciarlo).
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
+
+          # requests = lo que se reserva; limits = el techo. Si pasa el límite de
+          # memoria, Kubernetes lo mata (OOMKilled) y lo reinicia.
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+---
+# Service = nombre y puerto estables para llegar al backend, aunque el pod
+# cambie de IP cada vez que se reinicia.
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  labels:
+    app.kubernetes.io/name: backend
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: backend
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

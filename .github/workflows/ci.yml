@@ -4,7 +4,9 @@
 # Qué hace en cada push / pull request:
 #   1. Job "test":   instala dependencias, corre los tests unitarios y e2e
 #                    y compila la app. Si algo falla, el pipeline queda en rojo.
-#   2. Job "docker": sólo si "test" pasó, construye la imagen Docker de producción
+#   2. Job "k8s-manifests": valida los manifiestos de k8s/ contra el esquema de
+#                    Kubernetes (en paralelo con "test").
+#   3. Job "docker": sólo si "test" pasó, construye la imagen Docker de producción
 #                    para asegurar que el Dockerfile sigue funcionando.
 #
 # Los tests e2e levantan su propio PostgreSQL en memoria (PGlite), así que no
@@ -59,6 +61,31 @@ jobs:
 
       - name: Compilar (nest build)
         run: npm run build
+
+  k8s-manifests:
+    name: Validar manifiestos de Kubernetes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@v4
+
+      # El Secret se genera desde k8s/secrets.env, que no está en git:
+      # en CI usamos la plantilla con valores falsos sólo para poder renderizar.
+      - name: Renderizar con kustomize (kubectl ya viene en el runner)
+        run: |
+          cp k8s/secrets.env.example k8s/secrets.env
+          kubectl kustomize k8s > rendered.yaml
+          echo "Recursos generados:"
+          grep -E '^kind:' rendered.yaml | sort | uniq -c
+
+      # kubeconform valida cada recurso contra el esquema oficial de Kubernetes
+      # (campos mal escritos, tipos incorrectos, etc.) sin necesitar un cluster.
+      - name: Validar contra el esquema de Kubernetes (kubeconform)
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz | tar xz kubeconform
+          ./kubeconform -strict -summary rendered.yaml
 
   docker:
     name: Build de imagen Docker
