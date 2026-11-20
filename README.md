@@ -1,219 +1,105 @@
-# 💈 Turnazo — Turnero PWA para barberías
+# Turnazo
 
-Turnazo es una aplicación multi-barbería para publicar turnos de 30 minutos, tomarlos con una seña cobrada por Mercado Pago y enviar recordatorios por Web Push y email. Tiene tres roles: `SUPERADMIN`, `BARBER` y `CLIENT`, y todos inician sesión con **DNI + contraseña**.
+**A barbershop booking PWA that I took from "it works on my machine" to a tested, containerised, monitored and security-scanned service running on Kubernetes.**
 
-> Este README solo describe lo que está implementado en el código de este repositorio. Cada afirmación remite al archivo donde se puede verificar.
+I'm Alan Grieve, a full-stack developer from Venado Tuerto, Argentina. Turnazo is my own product: barbers publish 30-minute slots, clients book them by paying a deposit through Mercado Pago, and both sides get reminders by Web Push and email.
 
----
-
-## Funcionalidades
-
-| Funcionalidad | Dónde está |
-| :--- | :--- |
-| Turnos de **30 minutos** (`SLOT_DURATION_MS`) | `backend/src/appointments/appointments.service.ts` |
-| **Bloqueo temporal de 10 minutos** al reservar (`LOCK_DURATION_MS`), con token cuyo hash se guarda en `lock_token_hash` | `backend/src/appointments/appointments.service.ts` |
-| Liberación de bloqueos vencidos por cron (cada 1 y cada 2 minutos) | `appointments-cleanup.cron.ts`, `security/privacy-retention.service.ts` |
-| Seña por turno: `deposit_amount` con valor por defecto **2000** | `backend/prisma/schema.prisma` |
-| Pago con **Mercado Pago** (preferencia + webhook con firma HMAC y tolerancia configurable) | `backend/src/payments/` |
-| Pagos aprobados que no pueden asignarse a un turno → `OrphanPayment` (`REQUIRES_REFUND` / `REFUNDED` / `RESOLVED`) | `backend/prisma/schema.prisma` |
-| **Recordatorios 24 h y 2 h** antes del turno, para **todos** los turnos `CONFIRMED` (cron cada 10 min, sin depender del add-on `reminder_addon_active`) | `backend/src/notifications/reminder-scheduler.service.ts` |
-| Canales: **Web Push** (VAPID; se desactiva si faltan las claves) y **email SMTP**; archivo `.ics` y links de WhatsApp | `backend/src/notifications/`, `backend/src/mail/` |
-| Liquidaciones semanales por barbero (`WeeklySettlement`: `bonus_tier`, `bonus_amount_ars`) | `backend/src/admin/` |
-| Retención de datos personales: purga diaria (04:00) según `PII_RETENTION_DAYS` (por defecto 30) | `backend/src/security/privacy-retention.service.ts` |
-| Rate limiting, cabeceras de seguridad (CSP, HSTS, X-Frame-Options), payload máximo de 64 KB y CORS restringido en producción | `backend/src/security/`, `backend/src/main.ts` |
+After sending about 50 outreach messages to local barbers without a single taker, I paused the sales push and decided not to abandon the project. The code already had Docker, a real test suite and a security-hardening pass, so it was the right base for something I wanted to get good at: **DevOps**. This README is the story of that work, what I built, what broke along the way, and how to run all of it yourself.
 
 ---
 
-## Stack
+## What I built on top of the app
 
-Las versiones son los rangos declarados en cada `package.json`.
+| Stage | What it does | Where to look |
+| :--- | :--- | :--- |
+| **CI** with GitHub Actions | On every push: 140 unit tests, 50 end-to-end tests (against an in-memory PostgreSQL), a production build, validation of the Kubernetes manifests, and a Docker image build | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) |
+| **Kubernetes** (k3s) | Backend and PostgreSQL as manifests: health probes, resource limits, non-root containers, secrets generated from an untracked file, and automatic restart of a crashed container | [`k8s/`](k8s/README.md) |
+| **Observability** | A `/metrics` endpoint in the API, Prometheus scraping it, a Grafana dashboard, and Alertmanager sending a Telegram message when the backend goes down | [`k8s/monitoring/`](k8s/monitoring/README.md) |
+| **DevSecOps** | The CI scans the Docker image with Trivy and fails the build on any CRITICAL vulnerability that has a fix available | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) |
 
-### Backend (`backend/`)
-| Área | Tecnología |
-| :--- | :--- |
-| Runtime | Node.js — imagen Docker `node:24-alpine`; tests verificados en Node 24.20 |
-| Framework | NestJS 10 (`@nestjs/common` ^10.4.22, `@nestjs/core` ^10.3.0), TypeScript ^5.4 |
-| Base de datos | PostgreSQL + Prisma 6 (`prisma` / `@prisma/client` 6.19.3 instalado) |
-| Auth | `@nestjs/jwt` + `passport-jwt`, contraseñas con `bcrypt` ^5.1.1 |
-| Pagos | `mercadopago` ^3.6.1 |
-| Tareas programadas | `@nestjs/schedule` ^4.0.1 |
-| Notificaciones | `web-push` ^3.6.7, `nodemailer` ^6.9.13 |
-| Documentación API | `@nestjs/swagger` ^7.4.2 (Swagger UI en `/docs`) |
-| Tests | Jest 29 + ts-jest; E2E contra PostgreSQL embebido con PGlite (`@electric-sql/pglite`) |
-
-### Frontend (`frontend/`)
-| Área | Tecnología |
-| :--- | :--- |
-| UI | React ^18.3.1 + TypeScript ^5.6.2 |
-| Bundler | Vite ^5.4.10 |
-| Estilos / íconos | Tailwind CSS ^4.0.0 (`@tailwindcss/vite`) + `lucide-react` |
-| PWA | `public/manifest.json` + `public/sw.js` (Service Worker con Web Push) |
-| Deploy | `vercel.json` (rewrite SPA a `index.html` y cabeceras para `sw.js` / `manifest.json`) |
-
----
-
-## Estructura
+### How the pieces fit
 
 ```text
-Turnazo/
-├── backend/
-│   ├── Dockerfile                 # Build multi-stage, node:24-alpine, HEALTHCHECK a /health
-│   ├── prisma/                    # schema.prisma, migraciones y seed.ts
-│   ├── src/
-│   │   ├── admin/                 # Barberos, toggle de recordatorios y liquidaciones (SUPERADMIN)
-│   │   ├── appointments/          # Turnos, locks, .ics y cron de limpieza
-│   │   ├── auth/                  # Login/registro por DNI, guards JWT y roles
-│   │   ├── docs/                  # Configuración de Swagger (DOCS_ENABLED y CSP de /docs)
-│   │   ├── health/                # GET /health
-│   │   ├── mail/                  # Envío SMTP
-│   │   ├── notifications/         # Web Push, recordatorios y links firmados de reserva
-│   │   ├── payments/              # Mercado Pago, webhook y pagos huérfanos
-│   │   ├── prisma/                # PrismaService
-│   │   └── security/              # Rate limit, cabeceras, filtro de excepciones, retención de datos
-│   └── test/                      # Suite E2E (PGlite efímero)
-└── frontend/
-    ├── public/                    # manifest.json, sw.js, íconos
-    └── src/                       # components, context, services, types, utils
+ git push ──► GitHub Actions ──► tests · manifest validation · Docker build · Trivy scan
+                                                    │
+                                              (merge to main)
+                                                    ▼
+   ┌───────────────── k3s cluster ─────────────────────────────────────────┐
+   │  namespace turnazo                      namespace monitoring          │
+   │  ┌─────────────┐   ┌───────────┐        ┌────────────┐  alert  ┌────┐ │
+   │  │ NestJS API  │──►│ PostgreSQL│        │ Prometheus │────────►│Alert│─┼─► Telegram
+   │  │ /health     │   └───────────┘        └─────┬──────┘         │mgr │ │
+   │  │ /metrics ◄──┼── scrape every 15s ──────────┘                └────┘ │
+   │  └─────────────┘                        ┌────────────┐                │
+   │                                         │  Grafana   │ dashboard      │
+   │                                         └────────────┘                │
+   └───────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Cómo levantarlo (local)
+## Things that went wrong, and what I learned
 
-### Requisitos
-- Node.js 24 (la versión de la imagen Docker y la usada para verificar los tests).
-- Un PostgreSQL accesible desde `DATABASE_URL`.
+Most of what I learned came from things that did not work the first time.
 
-### 1. Variables de entorno del backend
+- **My PC could not run Rancher Desktop.** It needs a virtual machine and refused to start ("nested virtualization not enabled"). I installed k3s natively on Arch Linux instead. It is the same Kubernetes distribution without the VM, and it forced me to learn how images reach the cluster's own containerd (`docker save | k3s ctr images import`).
+- **The first deploy crashed three times, and that was fine.** The API started before PostgreSQL was ready, `prisma migrate deploy` failed, and Kubernetes kept restarting the container until the database answered. It was an accidental but real demonstration of self-healing, and it showed me why probes and restart policies matter.
+- **My first "backend down" alert would never have fired.** When a pod is deleted, its `up` metric does not turn into `0`, the series simply disappears. I rewrote the rule as `absent(up == 1)` and added a test with `promtool` that simulates exactly that case, so CI protects it.
+- **Trivy itself was compromised.** While adding the scanner I found that in March 2026 attackers rewrote almost every version tag of Trivy's GitHub Action. I pinned the action to an exact commit and the Trivy binary to a known-safe version, because a commit cannot be rewritten and a tag can.
+- **A critical vulnerability came from a package I never chose.** The `tar` library reached my image through `bcrypt`. Upgrading `bcrypt` to v6 removed it, with no change to my code. The 12 remaining high-severity findings need major upgrades of NestJS and Prisma, so I documented them instead of rushing a risky change.
+- **A dashboard panel lied.** My "restarts" panel showed dates from 1969 because I used the wrong unit. I replaced it with a plain uptime figure.
 
-```bash
-cp backend/.env.example backend/.env
-```
+## How I worked
 
-Completá `backend/.env`. Todos los valores de `.env.example` son falsos. Algunas reglas que aplica el código:
+I built this together with Claude, Anthropic's AI assistant, working as a pair-programming partner. It drafted manifests, pipeline steps and configuration; I decided what to build and in what order, ran every command on my own machine, read the logs when something failed, and kept changing the plan based on what actually happened. Every change went through a branch and a pull request, and the CI has to be green before I merge.
 
-| Variable | Regla |
+---
+
+## About the application
+
+| Feature | Notes |
 | :--- | :--- |
-| `JWT_SECRET` | **Obligatoria, ≥ 32 caracteres.** Sin ella la API no arranca (`src/auth/jwt-secret.util.ts`). |
-| `SUPERADMIN_DNI`, `SUPERADMIN_PASSWORD` | **Obligatorias en cualquier entorno.** La API y el seed fallan si faltan o si la contraseña sigue siendo el placeholder `CAMBIAR_…`. No hay valores por defecto (`src/auth/superadmin-credentials.util.ts`). |
-| `FRONTEND_URL` | Orígenes permitidos por CORS (separados por coma). El primero se usa para armar links. En producción, si no se define, se bloquea cualquier origen de navegador. |
-| `DOCS_ENABLED` | Vacía: `/docs` está encendido fuera de producción y apagado con `NODE_ENV=production`. `true`/`false` lo fuerzan. Cualquier otro valor aborta el arranque. |
-| `METRICS_ENABLED` | Vacía: `GET /metrics` (formato Prometheus) está encendido fuera de producción y apagado con `NODE_ENV=production`. `true`/`false` lo fuerzan. Cualquier otro valor aborta el arranque. No tiene autenticación: en producción dejalo apagado salvo que el puerto no sea público. |
-| `MP_ACCESS_TOKEN` | El valor de ejemplo `…CENTRAL-PLATFORM-TOKEN` activa el modo simulado de pagos. |
-| `MP_WEBHOOK_SECRET` | Vacía: todos los webhooks se rechazan por firma inválida. |
-| `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | Vacías: el canal push queda deshabilitado. Generar con `npx web-push generate-vapid-keys`. |
+| 30-minute slots with a **10-minute temporary lock** while a client pays | Lock token stored hashed; expired locks released by cron |
+| **Mercado Pago** deposits | Webhook with HMAC signature validation and idempotency; approved payments that cannot be matched to a slot are kept as `OrphanPayment` for refund |
+| **Reminders** 24 h and 2 h before the appointment | Web Push (VAPID) and email, plus `.ics` files and WhatsApp links |
+| Three roles: `SUPERADMIN`, `BARBER`, `CLIENT` | JWT authentication with DNI + password |
+| Security | Rate limiting, CSP / HSTS headers, 64 KB payload cap, strict CORS in production, scheduled purge of personal data |
 
-`backend/.env.example` documenta el resto (SMTP, `PII_RETENTION_DAYS`, `MP_WEBHOOK_URL`, etc.).
+**Stack:** NestJS 10, TypeScript, Prisma 6 and PostgreSQL on the backend; React 18, Vite and Tailwind CSS as an installable PWA on the frontend. Docker, GitHub Actions, k3s, Prometheus, Grafana, Alertmanager and Trivy for delivery and operations.
 
-### 2. Backend
-
-```bash
-cd backend
-npm ci
-npx prisma migrate deploy   # aplica las migraciones de prisma/migrations
-npm run prisma:seed         # opcional, ver advertencia abajo
-npm run start:dev           # http://localhost:3000
-```
-
-> **npm 12 bloquea los install scripts por defecto.** Si `npm ci` muestra `install scripts blocked`, `bcrypt` queda sin su binario nativo y el cliente de Prisma sin generar. Para completar la instalación:
-> ```bash
-> (cd node_modules/bcrypt && ../.bin/node-pre-gyp install --fallback-to-build)
-> npx prisma generate
-> node -e "console.log(require('bcrypt').hashSync('x', 4).slice(0, 4))"   # debe imprimir $2b$
-> ```
-> npm también sugiere `npm install-scripts approve <paquete>`.
-
-> ⚠️ **Seed:** `prisma/seed.ts` crea el SuperAdmin (con `SUPERADMIN_DNI` / `SUPERADMIN_PASSWORD`), una barbería de demostración con un usuario barbero de **credenciales fijas definidas en el propio archivo** y turnos de prueba. No lo corras contra una base de producción.
-
-### 3. Frontend
-
-```bash
-cd frontend
-npm ci
-npm run dev                 # Vite, http://localhost:5173
-```
-
-La URL del backend sale de `VITE_API_URL`. Si no está definida, el frontend usa `http://localhost:3000` (`src/services/api.ts`). Para producción hay un ejemplo en `frontend/.env.production.example`.
+The complete technical reference (every endpoint, environment variable and test result) is in [`docs/README.es.md`](docs/README.es.md), written in Spanish.
 
 ---
 
-## Docker (backend)
+## Run it yourself
 
-El `Dockerfile` usa `node:24-alpine`. Al arrancar corre `prisma migrate deploy` y después `node dist/main`. Trae un `HEALTHCHECK` contra `GET /health`, y el build falla si el binario nativo de bcrypt no quedó instalado.
-
-> **`docker run --env-file` no quita las comillas.** Con `JWT_SECRET="abc"`, la variable dentro del contenedor vale `"abc"` con comillas incluidas, y lo mismo pasa con `DATABASE_URL`, etc. Docker necesita un archivo de variables **sin comillas**. Podés generarlo a partir de tu `.env`:
->
-> ```bash
-> cd backend
-> sed -E 's/^([A-Za-z0-9_]+)="(.*)"$/\1=\2/' .env > .env.docker
-> ```
->
-> `backend/.gitignore` ignora `.env.docker` (regla `.env.*`).
+You need Docker and a local Kubernetes cluster (I use k3s on Arch Linux; Rancher Desktop or any local cluster also works).
 
 ```bash
-cd backend
-docker build -t turnazo-backend:local .
-docker run --rm -d --name turnazo-api -p 3000:3000 \
-  --env-file .env.docker -e NODE_ENV=production turnazo-backend:local
-docker inspect --format '{{.State.Health.Status}}' turnazo-api   # healthy después del start-period (60 s)
-curl -si http://localhost:3000/health
-docker stop turnazo-api
+# 1. Build the image and load it into k3s
+docker build -t turnazo-backend:local backend
+docker save turnazo-backend:local | sudo k3s ctr images import -
+
+# 2. Deploy the app (fill k8s/secrets.env first; the template explains how)
+cp k8s/secrets.env.example k8s/secrets.env
+kubectl apply -k k8s/
+kubectl port-forward -n turnazo svc/backend 3000:80
+curl localhost:3000/health            # {"status":"ok"}
+
+# 3. Deploy monitoring
+cp k8s/monitoring/secrets.env.example k8s/monitoring/secrets.env
+kubectl apply -k k8s/monitoring/
+kubectl port-forward -n monitoring svc/grafana 3001:3000    # http://localhost:3001
 ```
 
-`DATABASE_URL` tiene que apuntar a una base accesible desde el contenedor; `localhost` es el propio contenedor.
+Then try breaking it on purpose: `kubectl scale -n turnazo deploy/backend --replicas=0` turns the dashboard red and, a minute later, sends the Telegram alert. The details, including how to create the Telegram bot, are in [`k8s/monitoring/README.md`](k8s/monitoring/README.md).
+
+To run the tests: `cd backend && npm ci && npm test && npm run test:e2e`.
 
 ---
 
-## API
+## What is next
 
-- **Documentación interactiva:** [`http://localhost:3000/docs`](http://localhost:3000/docs) (Swagger UI) y `/docs-json` (OpenAPI 3.0). Se controla con `DOCS_ENABLED` y está apagada por defecto en producción. Tiene una CSP propia, relajada solo para esas rutas.
-- **Health check:** `GET /health` → `200 {"status":"ok"}`. No consulta la base de datos ni ejecuta lógica de negocio. Lo usa el `HEALTHCHECK` de Docker.
-
-### Endpoints principales
-
-Autenticación: `Authorization: Bearer <JWT>`, obtenido en `POST /auth/login`.
-
-| Método | Ruta | Acceso |
-| :--- | :--- | :--- |
-| `POST` | `/auth/login` | Público |
-| `POST` | `/auth/register` | Público |
-| `GET` | `/auth/me`, `/barbers/me` | JWT |
-| `GET` | `/appointments/public/:slug` | Público (agenda de una barbería) |
-| `POST` | `/appointments/:slotId/lock` | Público (bloqueo de 10 min) |
-| `POST` | `/appointments/:slotId/release-lock` | Público (requiere el token del bloqueo) |
-| `GET` | `/appointments/:slotId/summary`, `/appointments/:slotId/ics` | Público |
-| `POST` | `/appointments/:slotId/cancel` | JWT |
-| `GET` | `/appointments/client/my-slots` | JWT |
-| `GET` / `POST` | `/appointments/barber/slots` | JWT, rol `BARBER` |
-| `POST` | `/payments/create-preference` | Público |
-| `POST` | `/payments/confirm-return` | Público |
-| `POST` | `/payments/webhook` | Firma de Mercado Pago (`MercadoPagoWebhookGuard`) |
-| `POST` | `/payments/simulate-webhook` | Público; responde 404 con `NODE_ENV=production` |
-| `GET` | `/notifications/vapid-public-key` | Público |
-| `POST` | `/notifications/subscribe` | Público; requiere el token firmado del turno |
-| `GET` / `POST` | `/admin/barbers` | JWT, rol `SUPERADMIN` |
-| `PATCH` | `/admin/barbers/:id/toggle-reminder` | JWT, rol `SUPERADMIN` |
-| `GET` | `/admin/settlements` | JWT, rol `SUPERADMIN` |
-| `PATCH` | `/admin/settlements/:barberId/transfer` | JWT, rol `SUPERADMIN` |
-| `GET` | `/health` | Público |
-
-Las rutas de `admin` también responden sin el prefijo (`/barbers`, `/settlements`, …), porque el controlador se declara como `@Controller(['admin', ''])`.
-
----
-
-## Tests
-
-```bash
-cd backend
-npm test            # unitarios
-npm run test:e2e    # E2E: levanta un PostgreSQL embebido (PGlite) en memoria; no usa tu base
-```
-
-Último resultado verificado (Node 24.20, instalación limpia con `npm ci` y bcrypt nativo):
-
-| Suite | Resultado |
-| :--- | :--- |
-| Unitarios | **126 tests en 13 suites — todos pasan** |
-| E2E (seguridad y concurrencia) | **50 tests en 1 suite — todos pasan**. Matriz interna: 63 PASS, 1 WARN, 0 FAIL |
-
-El único WARN es esperado: el replay idéntico de un webhook dentro de la ventana de 300 s se acepta por diseño y queda mitigado por idempotencia.
+- **Infrastructure as code:** provision the server and firewall with Terraform instead of clicking through a provider's console.
+- **Deeper monitoring:** database and node metrics, and an alert on container restarts.
+- **Dependency upgrades:** the remaining high-severity findings, through planned major upgrades of NestJS, Prisma and nodemailer.
