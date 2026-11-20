@@ -9,7 +9,9 @@
 #                    Alertmanager y corre los tests de las reglas de alerta
 #                    (en paralelo con "test").
 #   3. Job "docker": sólo si "test" pasó, construye la imagen Docker de producción
-#                    para asegurar que el Dockerfile sigue funcionando.
+#                    para asegurar que el Dockerfile sigue funcionando, y la escanea
+#                    con Trivy: lista las vulnerabilidades HIGH/CRITICAL y BLOQUEA el
+#                    pipeline si hay alguna CRITICAL con parche disponible.
 #
 # Los tests e2e levantan su propio PostgreSQL en memoria (PGlite), así que no
 # hace falta ninguna base de datos ni secretos en GitHub.
@@ -134,6 +136,36 @@ jobs:
         with:
           context: backend
           push: false
+          load: true # la deja disponible en el runner para escanearla
           tags: turnazo-backend:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # SEGURIDAD: la action de Trivy se fija a un COMMIT exacto (no a un tag) y el
+      # binario a una versión conocida. En marzo de 2026 casi todos los tags de
+      # aquasecurity/trivy-action fueron reescritos con código malicioso; un commit
+      # no se puede reescribir. 57a97c7... = trivy-action v0.35.0 (versión segura).
+      # Para actualizarla: verificar el nuevo commit en el repo oficial y cambiar el SHA.
+      - name: Escanear vulnerabilidades (reporte HIGH y CRITICAL)
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        with:
+          version: v0.69.3
+          image-ref: turnazo-backend:${{ github.sha }}
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true # sólo lo que ya tiene parche disponible
+          format: table
+          exit-code: "0" # este paso sólo informa; el bloqueo es el siguiente
+          trivyignores: .trivyignore
+
+      - name: Bloquear si hay vulnerabilidades CRITICAL con parche
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        with:
+          version: v0.69.3
+          image-ref: turnazo-backend:${{ github.sha }}
+          scanners: vuln
+          severity: CRITICAL
+          ignore-unfixed: true
+          format: table
+          exit-code: "1"
+          trivyignores: .trivyignore
