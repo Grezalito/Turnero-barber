@@ -1,0 +1,13 @@
+# Copiar a terraform.tfvars (ignorado por git) y completar.
+# Alternativa: variables de entorno, p. ej. export TF_VAR_superadmin_password=...
+
+superadmin_dni      = "00000000"
+superadmin_password = "" # obligatoria, mínimo 8 caracteres, distinta de CAMBIAR_...
+
+# Opcionales (si se omiten, jwt_secret y mp_webhook_secret se generan al azar):
+# kube_context      = "rancher-desktop"
+# frontend_url      = "http://localhost:5173"
+# metrics_enabled   = true
+# jwt_secret        = "" # mínimo 32 caracteres
+# mp_webhook_secret = ""
+# mp_access_token   = "" # null (por defecto) = modo simulado de pagos
