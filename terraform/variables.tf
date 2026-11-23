@@ -67,9 +67,9 @@ variable "metrics_enabled" {
 }
 
 variable "mp_access_token" {
-  description = "Token de Mercado Pago. El valor por defecto activa el modo simulado (no cobra nada)."
+  description = "Token de Mercado Pago. null = modo simulado (se usa el token de ejemplo de .env.example y no cobra nada)."
   type        = string
-  default     = "APP_USR-CENTRAL-PLATFORM-TOKEN"
+  default     = null
   sensitive   = true
 }
 

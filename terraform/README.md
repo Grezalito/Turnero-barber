@@ -53,7 +53,7 @@ Para borrar todo: `terraform destroy` (elimina el namespace y con él el volumen
 | `superadmin_password` | — (obligatoria) | Mínimo 8 caracteres y distinta de `CAMBIAR_...` |
 | `jwt_secret` | `null` | `null` = se genera uno aleatorio de 48 caracteres. Si lo pasás, mínimo 32 |
 | `mp_webhook_secret` | `null` | `null` = se genera uno aleatorio |
-| `mp_access_token` | token simulado | El valor por defecto activa el modo simulado de pagos (no cobra nada) |
+| `mp_access_token` | `null` | `null` = modo simulado de pagos (usa el token de ejemplo de `.env.example`, no cobra nada) |
 | `backend_image` | `turnazo-backend:local` | Con una imagen de un registry, usar `backend_image_pull_policy = "IfNotPresent"` |
 | `kube_context` | `null` | `null` = contexto actual; con Rancher Desktop es `rancher-desktop` |
 | `metrics_enabled` | `true` | Seguro con Service ClusterIP; en un deploy público, `false` |

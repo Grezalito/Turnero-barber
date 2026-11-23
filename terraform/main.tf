@@ -18,6 +18,11 @@ locals {
 
   jwt_secret        = coalesce(var.jwt_secret, random_password.jwt.result)
   mp_webhook_secret = coalesce(var.mp_webhook_secret, random_password.mp_webhook.result)
+
+  # Token de ejemplo que la API reconoce como "modo simulado" de Mercado Pago (no cobra
+  # nada). Es el mismo valor público que figura en backend/.env.example: no es una credencial.
+  mp_simulated_token = "APP_USR-CENTRAL-PLATFORM-TOKEN"
+  mp_access_token    = coalesce(var.mp_access_token, local.mp_simulated_token)
 }
 
 # --- Secretos generados ---------------------------------------------------------
@@ -59,7 +64,7 @@ resource "kubernetes_secret_v1" "turnazo" {
     POSTGRES_PASSWORD   = random_password.postgres.result
     JWT_SECRET          = local.jwt_secret
     MP_WEBHOOK_SECRET   = local.mp_webhook_secret
-    MP_ACCESS_TOKEN     = var.mp_access_token
+    MP_ACCESS_TOKEN     = local.mp_access_token
     SUPERADMIN_DNI      = var.superadmin_dni
     SUPERADMIN_PASSWORD = var.superadmin_password
   }

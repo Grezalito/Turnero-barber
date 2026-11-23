@@ -10,4 +10,4 @@ superadmin_password = "" # obligatoria, mínimo 8 caracteres, distinta de CAMBIA
 # metrics_enabled   = true
 # jwt_secret        = "" # mínimo 32 caracteres
 # mp_webhook_secret = ""
-# mp_access_token   = "" # el valor por defecto es el modo simulado
+# mp_access_token   = "" # null (por defecto) = modo simulado de pagos
