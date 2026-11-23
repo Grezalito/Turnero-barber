@@ -6,6 +6,14 @@ Turnazo es una aplicación multi-barbería para publicar turnos de 30 minutos, t
 
 Documentación técnica: [arquitectura, concurrencia y decisiones](docs/ARCHITECTURE.md). Demo en vivo: https://turnero-barber.vercel.app
 
+### English summary
+
+Turnazo is a multi-barbershop booking PWA: barbers publish 30-minute slots, clients reserve them with a $2,000 ARS deposit paid through Mercado Pago, and reminders go out by Web Push and email. Backend: NestJS 10, TypeScript, Prisma and PostgreSQL. Frontend: React, Vite and Tailwind, deployed on Vercel.
+
+What it demonstrates: double bookings are prevented with atomic, conditional database updates instead of application-level locks. Payments are verified against the Mercado Pago API and processed idempotently, and approved payments that cannot be assigned are recorded as orphan payments instead of overwriting another booking. Webhooks are HMAC-verified. The backend ships as a multi-stage Docker image that runs as non-root with a health check, plus Kubernetes manifests; CI validates the manifests and scans the image with Trivy. There are 126 unit tests and 50 end-to-end tests that run against an embedded PostgreSQL (PGlite).
+
+Architecture, concurrency design and technical decisions are documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (in Spanish, like the rest of this README). Live demo: https://turnero-barber.vercel.app
+
 ---
 
 ## Funcionalidades
