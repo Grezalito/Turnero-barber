@@ -4,6 +4,8 @@ Turnazo es una aplicación multi-barbería para publicar turnos de 30 minutos, t
 
 > Este README solo describe lo que está implementado en el código de este repositorio. Cada afirmación remite al archivo donde se puede verificar.
 
+Documentación técnica: [arquitectura, concurrencia y decisiones](docs/ARCHITECTURE.md). Demo en vivo: https://turnero-barber.vercel.app
+
 ---
 
 ## Funcionalidades
